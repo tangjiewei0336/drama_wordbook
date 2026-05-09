@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wordbook 统计界面</title>
+    <link rel="stylesheet" href="./dashboard.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <h1>Wordbook 统计界面</h1>
+        <div class="actions">
+          <button id="viewByPlayer" class="active">按播放器组织</button>
+          <button id="viewByTime">按时间</button>
+          <button id="refreshBtn">刷新</button>
+        </div>
+      </header>
+      <div id="error" class="error"></div>
+      <div class="layout">
+        <aside class="sidebar">
+          <input id="searchInput" class="search" placeholder="按词面/释义/例句搜索（时间视图）" />
+          <div id="leftPanel"></div>
+        </aside>
+        <main id="detailPanel" class="detail">
+          <section id="dictSection" class="dict-section">
+            <div class="muted">请选择左侧节点查看词典释义</div>
+          </section>
+          <section id="gallerySection" class="gallery-section">
+            <div class="muted">选择后会在这里展示剧照瀑布流</div>
+          </section>
+        </main>
+      </div>
+    </div>
+    <div id="lightbox" class="lightbox hidden">
+      <div id="lightboxMask" class="lightbox-mask"></div>
+      <img id="lightboxImg" class="lightbox-img" alt="preview" />
+    </div>
+    <script type="module" src="./dashboard.js"></script>
+  </body>
+</html>

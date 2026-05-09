@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Wordbook 设置</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f7f8fa;
+      }
+      .card {
+        max-width: 720px;
+        background: #fff;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+      }
+      h1 {
+        margin: 0 0 16px 0;
+        font-size: 20px;
+      }
+      .row {
+        margin-bottom: 14px;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+        color: #222;
+      }
+      input[type="number"] {
+        width: 100%;
+        max-width: 280px;
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+      .hint {
+        margin-top: 4px;
+        color: #666;
+        font-size: 12px;
+      }
+      .actions {
+        margin-top: 16px;
+      }
+      .hotkey-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 14px;
+        margin-top: 6px;
+      }
+      .inline {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      input[type="text"] {
+        width: 80px;
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+      button {
+        border: none;
+        border-radius: 8px;
+        background: #1677ff;
+        color: #fff;
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+      .status {
+        margin-top: 10px;
+        min-height: 18px;
+        color: #1677ff;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>插件设置</h1>
+      <div class="row">
+        <label>
+          <input id="subtitleBandOnly" type="checkbox" />
+          仅保留视频下半区（字幕带）进行 OCR
+        </label>
+      </div>
+      <div class="row">
+        <label for="subtitleBandTopRatio">字幕带上边界比例（0-1）</label>
+        <input id="subtitleBandTopRatio" type="number" min="0" max="1" step="0.01" />
+        <div class="hint">默认 0.65，表示仅识别视频画面的下方 35% 区域。</div>
+      </div>
+      <div class="row">
+        <label for="subtitleBandBottomRatio">字幕带下边界比例（0-1）</label>
+        <input id="subtitleBandBottomRatio" type="number" min="0" max="1" step="0.01" />
+      </div>
+      <div class="row">
+        <label>
+          <input id="fixedSubtitleLayout" type="checkbox" />
+          固定双语布局（上半中文，下半日语）
+        </label>
+      </div>
+      <div class="row">
+        <label for="subtitleSplitRatio">上下分割比例（中文占比，0.2-0.8）</label>
+        <input id="subtitleSplitRatio" type="number" min="0.2" max="0.8" step="0.01" />
+        <div class="hint">默认 0.5：字幕带上半用于中文，下半用于日语。</div>
+      </div>
+      <div class="row">
+        <label>
+          <input id="autoPauseOnCapture" type="checkbox" />
+          截图时自动暂停视频
+        </label>
+      </div>
+      <div class="row">
+        <label for="maxRecentWords">最近词条保存数量（10-200）</label>
+        <input id="maxRecentWords" type="number" min="10" max="200" step="1" />
+      </div>
+      <div class="row">
+        <label>页面内截图快捷键（可自定义）</label>
+        <div class="hotkey-grid">
+          <label class="inline"><input id="hotkeyCtrl" type="checkbox" /> Ctrl</label>
+          <label class="inline"><input id="hotkeyMeta" type="checkbox" /> Command(⌘)</label>
+          <label class="inline"><input id="hotkeyShift" type="checkbox" /> Shift</label>
+          <label class="inline"><input id="hotkeyAlt" type="checkbox" /> Option(⌥)/Alt</label>
+          <label class="inline">主键 <input id="hotkeyKey" type="text" maxlength="1" placeholder="S" /></label>
+        </div>
+        <div class="hint">示例：mac 建议 Command + E（若冲突可改 Command + Shift + S）；Windows 建议 Ctrl + Shift + S。</div>
+      </div>
+      <div class="actions">
+        <button id="saveBtn">保存设置</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+    <script type="module" src="./options.js"></script>
+  </body>
+</html>

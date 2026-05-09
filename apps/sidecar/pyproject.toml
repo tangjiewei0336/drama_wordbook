@@ -1,0 +1,19 @@
+[project]
+name = "drama-wordbook-sidecar"
+version = "0.1.0"
+description = "Local FastAPI sidecar for Bilibili OCR POC"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.8.0",
+  "pillow>=10.4.0",
+  "paddleocr>=2.8.1",
+  "paddlepaddle>=3.0.0",
+  "sudachipy>=0.6.8",
+  "sudachidict-core>=20241021",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
