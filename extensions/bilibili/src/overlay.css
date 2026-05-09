@@ -1,0 +1,160 @@
+.wb-overlay-root {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  pointer-events: none;
+}
+
+.wb-overlay-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.wb-overlay-card {
+  position: absolute;
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(80vh, 760px);
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.32);
+  padding: 14px;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-overlay-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+
+.wb-overlay-meta {
+  font-size: 12px;
+  color: #666;
+}
+
+.wb-overlay-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-overlay-label {
+  font-size: 12px;
+  color: #444;
+}
+
+.wb-overlay-textarea {
+  width: 100%;
+  min-height: 56px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.wb-overlay-token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 170px;
+  overflow: auto;
+}
+
+.wb-overlay-token-bubble {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #111827;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wb-overlay-token-bubble.active {
+  background: #1677ff;
+  border-color: #1677ff;
+  color: #fff;
+}
+
+.wb-overlay-meaning-input {
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 6px;
+  font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.wb-overlay-dict-preview {
+  border: 1px dashed #d0d7de;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12px;
+  color: #334155;
+  background: #f8fafc;
+}
+
+.wb-overlay-dict-preview .muted {
+  color: #64748b;
+}
+
+.wb-overlay-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wb-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.wb-btn-primary {
+  background: #1677ff;
+  color: #fff;
+}
+
+.wb-btn-default {
+  background: #eef1f5;
+  color: #1d1d1f;
+}
+
+.wb-overlay-status {
+  min-height: 18px;
+  font-size: 12px;
+  color: #1677ff;
+}
+
+.wb-overlay-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 0;
+}
+
+.wb-spinner {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 3px solid #dbeafe;
+  border-top-color: #1677ff;
+  animation: wb-spin 0.9s linear infinite;
+}
+
+@keyframes wb-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

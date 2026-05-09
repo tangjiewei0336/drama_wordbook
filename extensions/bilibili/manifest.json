@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Drama Wordbook Bilibili POC",
+  "version": "0.1.0",
+  "description": "Capture Bilibili frame and send OCR request to local sidecar.",
+  "permissions": ["activeTab", "tabs", "scripting", "storage"],
+  "host_permissions": [
+    "https://www.bilibili.com/*",
+    "http://127.0.0.1:17321/*"
+  ],
+  "action": {
+    "default_title": "Wordbook POC",
+    "default_popup": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.bilibili.com/*"],
+      "css": ["src/overlay.css"],
+      "js": ["src/overlay.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "commands": {
+    "capture-ocr-pipeline": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "截图并执行 OCR + 分词"
+    }
+  }
+}

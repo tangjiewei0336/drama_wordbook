@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+dist/
+build/
+
+# Local captured photos/screenshots
+apps/sidecar/app/data/screenshots/
+db.sqlite3

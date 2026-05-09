@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/main.py
+app/models/__init__.py
+app/models/schemas.py
+app/services/__init__.py
+app/services/ocr_service.py
+app/services/tokenizer_service.py
+drama_wordbook_sidecar.egg-info/PKG-INFO
+drama_wordbook_sidecar.egg-info/SOURCES.txt
+drama_wordbook_sidecar.egg-info/dependency_links.txt
+drama_wordbook_sidecar.egg-info/requires.txt
+drama_wordbook_sidecar.egg-info/top_level.txt

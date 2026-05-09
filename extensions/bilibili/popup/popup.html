@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Wordbook 最近词条</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        width: 380px;
+        margin: 0;
+        padding: 12px 12px 10px 12px;
+        background: #f7f8fa;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+      .title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #1d1d1f;
+      }
+      .actions {
+        display: flex;
+        gap: 6px;
+      }
+      button {
+        border: none;
+        border-radius: 6px;
+        background: #e9edf3;
+        color: #1d1d1f;
+        cursor: pointer;
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      #list {
+        max-height: 420px;
+        overflow: auto;
+      }
+      .word-item {
+        background: #fff;
+        border: 1px solid #e6ebf1;
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 8px;
+      }
+      .word-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .surface {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .reading {
+        color: #666;
+        font-size: 12px;
+      }
+      .meaning {
+        margin-top: 6px;
+        font-size: 12px;
+        color: #333;
+      }
+      .meta {
+        margin-top: 6px;
+        font-size: 11px;
+        color: #666;
+      }
+      .empty {
+        color: #666;
+        font-size: 12px;
+        padding: 12px 4px;
+      }
+      .status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #1677ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="title">最近添加词语</div>
+      <div class="actions">
+        <button id="captureBtn">手动截图识别</button>
+        <button id="dashboardBtn">统计界面</button>
+        <button id="syncBtn">同步播放</button>
+        <button id="settingsBtn">设置</button>
+      </div>
+    </div>
+    <div id="list"></div>
+    <div id="status" class="status"></div>
+    <script src="./popup.js"></script>
+  </body>
+</html>

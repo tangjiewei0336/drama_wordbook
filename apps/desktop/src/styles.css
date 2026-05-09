@@ -1,0 +1,141 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f5f7fb;
+  color: #1f2329;
+}
+
+.app {
+  padding: 16px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  border: 1px solid #d0d7de;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button.active {
+  background: #1677ff;
+  color: #fff;
+  border-color: #1677ff;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 38% 62%;
+  gap: 12px;
+}
+
+.sidebar,
+.detail {
+  background: #fff;
+  border: 1px solid #e6ebf1;
+  border-radius: 12px;
+  padding: 10px;
+  min-height: 72vh;
+}
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tree-node {
+  border: 1px solid #eef1f5;
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.tree-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.tree-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font-size: 12px;
+}
+
+.search {
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.time-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card {
+  border: 1px solid #eef1f5;
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.example {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.example.zh {
+  color: #666;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.muted {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.error {
+  margin-bottom: 10px;
+  color: #d7263d;
+  font-size: 13px;
+}

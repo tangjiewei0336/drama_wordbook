@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: drama-wordbook-sidecar
+Version: 0.1.0
+Summary: Local FastAPI sidecar for Bilibili OCR POC
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: pydantic>=2.8.0
+Requires-Dist: pillow>=10.4.0
+Requires-Dist: paddleocr>=2.8.1
+Requires-Dist: paddlepaddle>=3.0.0
+Requires-Dist: sudachipy>=0.6.8
+Requires-Dist: sudachidict-core>=20241021
