@@ -8,32 +8,36 @@
 .wb-overlay-mask {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.32);
+  background: rgba(15, 23, 42, 0.36);
+  backdrop-filter: blur(3px);
 }
 
 .wb-overlay-card {
   position: absolute;
   width: min(520px, calc(100vw - 32px));
   max-height: min(80vh, 760px);
-  background: #ffffff;
-  border-radius: 14px;
-  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.32);
-  padding: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(223, 229, 235, 0.92);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.26);
+  padding: 16px;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  backdrop-filter: blur(18px);
 }
 
 .wb-overlay-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1d1d1f;
+  font-size: 17px;
+  font-weight: 800;
+  color: #18202b;
+  letter-spacing: 0;
 }
 
 .wb-overlay-meta {
   font-size: 12px;
-  color: #666;
+  color: #667085;
 }
 
 .wb-overlay-section {
@@ -44,18 +48,28 @@
 
 .wb-overlay-label {
   font-size: 12px;
-  color: #444;
+  color: #475467;
+  font-weight: 800;
 }
 
 .wb-overlay-textarea {
   width: 100%;
   min-height: 56px;
-  border: 1px solid #d0d7de;
+  border: 1px solid #dfe5eb;
   border-radius: 8px;
-  padding: 8px;
+  padding: 9px 10px;
   font-size: 13px;
   resize: vertical;
   box-sizing: border-box;
+  color: #18202b;
+  background: #fff;
+  outline: none;
+}
+
+.wb-overlay-textarea:focus,
+.wb-overlay-meaning-input:focus {
+  border-color: rgba(46, 143, 118, 0.55);
+  box-shadow: 0 0 0 3px rgba(46, 143, 118, 0.11);
 }
 
 .wb-overlay-token-list {
@@ -67,37 +81,64 @@
 }
 
 .wb-overlay-token-bubble {
-  border: 1px solid #cbd5e1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #dfe5eb;
   background: #fff;
-  color: #111827;
+  color: #344054;
   border-radius: 999px;
   padding: 6px 12px;
   font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.wb-overlay-token-level {
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: #24745f;
+  background: #e8f7f1;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.wb-overlay-token-bubble:hover {
+  transform: translateY(-1px);
+  border-color: rgba(46, 143, 118, 0.45);
+  background: #f1faf6;
 }
 
 .wb-overlay-token-bubble.active {
-  background: #1677ff;
-  border-color: #1677ff;
+  background: #263241;
+  border-color: #263241;
   color: #fff;
 }
 
+.wb-overlay-token-bubble.active .wb-overlay-token-level {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .wb-overlay-meaning-input {
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  padding: 6px;
-  font-size: 12px;
+  border: 1px solid #dfe5eb;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 13px;
   width: 100%;
   box-sizing: border-box;
+  outline: none;
 }
 
 .wb-overlay-dict-preview {
-  border: 1px dashed #d0d7de;
+  border: 1px solid #e7ebef;
   border-radius: 8px;
-  padding: 8px;
+  padding: 10px;
   font-size: 12px;
-  color: #334155;
-  background: #f8fafc;
+  color: #344054;
+  background: #fbfcfd;
+  line-height: 1.5;
 }
 
 .wb-overlay-dict-preview .muted {
@@ -107,30 +148,35 @@
 .wb-overlay-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .wb-btn {
-  border: none;
+  border: 1px solid transparent;
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 8px 13px;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 800;
 }
 
 .wb-btn-primary {
-  background: #1677ff;
+  background: #2e8f76;
+  border-color: #2e8f76;
   color: #fff;
 }
 
 .wb-btn-default {
-  background: #eef1f5;
-  color: #1d1d1f;
+  background: #fff;
+  border-color: #dfe5eb;
+  color: #344054;
 }
 
 .wb-overlay-status {
   min-height: 18px;
   font-size: 12px;
-  color: #1677ff;
+  color: #24745f;
+  font-weight: 700;
 }
 
 .wb-overlay-loading {
@@ -145,8 +191,8 @@
   width: 24px;
   height: 24px;
   border-radius: 999px;
-  border: 3px solid #dbeafe;
-  border-top-color: #1677ff;
+  border: 3px solid #e8f7f1;
+  border-top-color: #2e8f76;
   animation: wb-spin 0.9s linear infinite;
 }
 

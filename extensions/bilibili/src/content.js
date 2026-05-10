@@ -11,6 +11,44 @@ const FALLBACK_HOTKEYS = IS_MAC
 
 let activeHotkey = { ...DEFAULT_HOTKEY };
 const STATUS_BADGE_ID = "wordbook-capture-status-badge";
+let asrRecorder = null;
+let asrMediaStream = null;
+let asrAudioContext = null;
+let asrAnalyser = null;
+let asrLevelTimer = null;
+let asrVideo = null;
+let asrCaptureId = 0;
+let asrSendChunks = false;
+
+function notifyAsrStopped(reason) {
+  chrome.runtime.sendMessage({
+    type: "POC_ASR_STOPPED_BY_VIDEO",
+    reason
+  }).catch(() => {});
+}
+
+function removeAsrVideoListeners() {
+  if (!asrVideo) return;
+  asrVideo.removeEventListener("pause", handleAsrVideoPaused);
+  asrVideo.removeEventListener("ended", handleAsrVideoEnded);
+  asrVideo.removeEventListener("emptied", handleAsrVideoEmptied);
+  asrVideo = null;
+}
+
+function handleAsrVideoPaused() {
+  stopAsrCapture("video_paused");
+  notifyAsrStopped("video_paused");
+}
+
+function handleAsrVideoEnded() {
+  stopAsrCapture("video_ended");
+  notifyAsrStopped("video_ended");
+}
+
+function handleAsrVideoEmptied() {
+  stopAsrCapture("video_unloaded");
+  notifyAsrStopped("video_unloaded");
+}
 
 function isEditableTarget(target) {
   if (!target) return false;
@@ -110,6 +148,117 @@ function setStatusBadge(status, message) {
 
 ensureStatusBadge();
 
+async function blobToBase64(blob) {
+  const ab = await blob.arrayBuffer();
+  const bytes = new Uint8Array(ab);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function startAsrCapture(intervalMs = 15000) {
+  if (asrRecorder && asrRecorder.state !== "inactive") {
+    return { ok: true, message: "already running" };
+  }
+  const video = document.querySelector("video");
+  if (!video || !video.captureStream) {
+    return { ok: false, error: "当前页面不支持音频采集" };
+  }
+  if (video.paused || video.ended) {
+    return { ok: false, error: "请先播放视频，再启动语音识别" };
+  }
+  const stream = video.captureStream();
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks.length) {
+    return { ok: false, error: "未检测到音频轨道" };
+  }
+  const captureId = asrCaptureId + 1;
+  asrCaptureId = captureId;
+  asrSendChunks = true;
+  asrVideo = video;
+  asrVideo.addEventListener("pause", handleAsrVideoPaused);
+  asrVideo.addEventListener("ended", handleAsrVideoEnded);
+  asrVideo.addEventListener("emptied", handleAsrVideoEmptied);
+  asrMediaStream = new MediaStream([audioTracks[0]]);
+  asrAudioContext = new AudioContext();
+  const sourceNode = asrAudioContext.createMediaStreamSource(asrMediaStream);
+  asrAnalyser = asrAudioContext.createAnalyser();
+  asrAnalyser.fftSize = 1024;
+  sourceNode.connect(asrAnalyser);
+  const levelArray = new Uint8Array(asrAnalyser.fftSize);
+  asrLevelTimer = window.setInterval(() => {
+    try {
+      if (!asrAnalyser) return;
+      asrAnalyser.getByteTimeDomainData(levelArray);
+      let sum = 0;
+      for (let i = 0; i < levelArray.length; i += 1) {
+        const centered = (levelArray[i] - 128) / 128;
+        sum += centered * centered;
+      }
+      const rms = Math.sqrt(sum / levelArray.length);
+      const level = Math.max(0, Math.min(1, rms * 3));
+      chrome.runtime.sendMessage({
+        type: "POC_ASR_LEVEL",
+        level,
+        rms
+      });
+    } catch {
+      // ignore level sampling errors
+    }
+  }, 300);
+
+  const preferred = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    ? "audio/webm;codecs=opus"
+    : "audio/webm";
+  asrRecorder = new MediaRecorder(asrMediaStream, { mimeType: preferred });
+  asrRecorder.ondataavailable = async (event) => {
+    try {
+      if (captureId !== asrCaptureId || !asrSendChunks) return;
+      if (!asrVideo || asrVideo.paused || asrVideo.ended) return;
+      if (!event.data || event.data.size < 1024) return;
+      const audioBase64 = await blobToBase64(event.data);
+      if (captureId !== asrCaptureId || !asrSendChunks) return;
+      await chrome.runtime.sendMessage({
+        type: "POC_ASR_AUDIO_CHUNK",
+        audio_base64: audioBase64,
+        mime_type: event.data.type || preferred
+      });
+    } catch (_error) {
+      // ignore chunk failure
+    }
+  };
+  asrRecorder.start(intervalMs);
+  return { ok: true };
+}
+
+function stopAsrCapture(_reason = "manual") {
+  asrSendChunks = false;
+  asrCaptureId += 1;
+  try {
+    if (asrRecorder && asrRecorder.state !== "inactive") {
+      asrRecorder.stop();
+    }
+  } catch {}
+  asrRecorder = null;
+  if (asrLevelTimer) {
+    window.clearInterval(asrLevelTimer);
+  }
+  asrLevelTimer = null;
+  if (asrAudioContext) {
+    asrAudioContext.close().catch(() => {});
+  }
+  asrAudioContext = null;
+  asrAnalyser = null;
+  removeAsrVideoListeners();
+  if (asrMediaStream) {
+    asrMediaStream.getTracks().forEach((t) => t.stop());
+  }
+  asrMediaStream = null;
+}
+
 document.addEventListener(
   "keydown",
   (event) => {
@@ -131,6 +280,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     setStatusBadge(message.status, message.message || "");
     sendResponse({ ok: true });
     return true;
+  }
+  if (message?.type === "POC_ASR_CONTROL") {
+    if (message.action === "start") {
+      startAsrCapture(Number(message.interval_ms || 60000)).then(sendResponse);
+      return true;
+    }
+    if (message.action === "stop") {
+      stopAsrCapture();
+      sendResponse({ ok: true });
+      return true;
+    }
   }
   return false;
 });

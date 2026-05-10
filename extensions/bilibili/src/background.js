@@ -4,6 +4,11 @@ const SIDECAR_BASE = "http://127.0.0.1:17321";
 let lastCaptureResult = null;
 let captureLock = false;
 let captureLockStartedAt = 0;
+let asrRunning = false;
+let asrTranscribing = false;
+let recentAsrResults = [];
+let asrAudioLevel = 0;
+let asrAudioLevelUpdatedAt = "";
 
 function releaseCaptureLock() {
   captureLock = false;
@@ -160,6 +165,31 @@ async function postVocabAddItems(items) {
     throw new Error(`vocab/add_items failed: ${res.status} ${text}`);
   }
   return res.json();
+}
+
+async function postAsrTranscribe(audioBase64) {
+  const res = await fetch(`${SIDECAR_BASE}/asr/transcribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      audio_base64: audioBase64,
+      language: "ja",
+      with_vad: true
+    })
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`asr/transcribe failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+function stopAsrState(reason = "") {
+  asrRunning = false;
+  asrTranscribing = false;
+  asrAudioLevel = 0;
+  asrAudioLevelUpdatedAt = new Date().toISOString();
+  return reason;
 }
 
 async function captureFrameDataUrl() {
@@ -541,7 +571,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         "POC_ADD_RECENT_WORDS",
         "POC_RESUME_PLAYBACK",
         "POC_RELEASE_CAPTURE_LOCK",
-        "POC_DICT_LOOKUP"
+        "POC_DICT_LOOKUP",
+        "POC_ASR_START",
+        "POC_ASR_STOP",
+        "POC_ASR_AUDIO_CHUNK",
+        "POC_ASR_GET_RESULTS",
+        "POC_ASR_LEVEL",
+        "POC_ASR_STOPPED_BY_VIDEO"
       ].includes(message?.type)
     ) {
       return;
@@ -599,6 +635,96 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "POC_DICT_LOOKUP") {
       const result = await postDictLookup(String(message?.lemma || ""));
       sendResponse({ ok: true, result });
+      return;
+    }
+
+    if (message.type === "POC_ASR_START") {
+      const tab = await getActiveBilibiliTab();
+      const res = await chrome.tabs.sendMessage(tab.id, {
+        type: "POC_ASR_CONTROL",
+        action: "start",
+        interval_ms: 15000
+      });
+      if (!res?.ok) {
+        stopAsrState();
+        sendResponse({ ok: false, error: res?.error || "语音识别启动失败", running: false });
+        return;
+      }
+      asrRunning = Boolean(res?.ok);
+      asrAudioLevel = 0;
+      asrAudioLevelUpdatedAt = new Date().toISOString();
+      await broadcastStatus("processing", "语音识别运行中（15秒分片）");
+      sendResponse({ ok: true, running: asrRunning });
+      return;
+    }
+
+    if (message.type === "POC_ASR_STOP") {
+      const tab = await getActiveBilibiliTab();
+      await chrome.tabs.sendMessage(tab.id, {
+        type: "POC_ASR_CONTROL",
+        action: "stop"
+      });
+      stopAsrState("manual");
+      await broadcastStatus("idle", "语音识别已停止");
+      sendResponse({ ok: true, running: false });
+      return;
+    }
+
+    if (message.type === "POC_ASR_AUDIO_CHUNK") {
+      if (!asrRunning || asrTranscribing) {
+        sendResponse({ ok: true, skipped: true });
+        return;
+      }
+      asrTranscribing = true;
+      try {
+        const asr = await postAsrTranscribe(String(message?.audio_base64 || ""));
+        if (asr?.text) {
+          recentAsrResults.unshift({
+            text: asr.text,
+            created_at: new Date().toISOString(),
+            duration: asr.duration
+          });
+          recentAsrResults = recentAsrResults.slice(0, 20);
+          await broadcastStatus("processing", `ASR: ${asr.text.slice(0, 16)}...`);
+        }
+        sendResponse({ ok: true });
+      } catch (error) {
+        await broadcastStatus("error", "语音识别失败");
+        sendResponse({ ok: false, error: String(error?.message || error) });
+      } finally {
+        asrTranscribing = false;
+      }
+      return;
+    }
+
+    if (message.type === "POC_ASR_GET_RESULTS") {
+      sendResponse({
+        ok: true,
+        running: asrRunning,
+        results: recentAsrResults,
+        audio_level: asrAudioLevel,
+        audio_level_updated_at: asrAudioLevelUpdatedAt
+      });
+      return;
+    }
+
+    if (message.type === "POC_ASR_LEVEL") {
+      if (!asrRunning) {
+        sendResponse({ ok: true, skipped: true });
+        return;
+      }
+      asrAudioLevel = Math.max(0, Math.min(1, Number(message?.level || 0)));
+      asrAudioLevelUpdatedAt = new Date().toISOString();
+      sendResponse({ ok: true });
+      return;
+    }
+
+    if (message.type === "POC_ASR_STOPPED_BY_VIDEO") {
+      const reason = String(message?.reason || "");
+      stopAsrState(reason);
+      const messageText = reason === "video_paused" ? "视频暂停，语音识别已停止" : "视频停止，语音识别已停止";
+      await broadcastStatus("idle", messageText);
+      sendResponse({ ok: true, running: false, reason });
       return;
     }
 

@@ -21,6 +21,11 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row["name"] == column for row in rows)
+
+
 def init_db() -> None:
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     conn = _get_conn()
@@ -57,6 +62,7 @@ def init_db() -> None:
                 head_id INTEGER NOT NULL,
                 surface TEXT NOT NULL,
                 reading TEXT,
+                jlpt_level TEXT,
                 meanings_json TEXT NOT NULL,
                 example_ja TEXT,
                 example_zh TEXT,
@@ -68,6 +74,8 @@ def init_db() -> None:
             );
             """
         )
+        if not _column_exists(conn, "vocab_item", "jlpt_level"):
+            conn.execute("ALTER TABLE vocab_item ADD COLUMN jlpt_level TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -180,14 +188,15 @@ def add_items(items: list[dict]) -> tuple[list[int], list[int]]:
             cur = conn.execute(
                 """
                 INSERT INTO vocab_item (
-                    head_id, surface, reading, meanings_json, example_ja, example_zh,
+                    head_id, surface, reading, jlpt_level, meanings_json, example_ja, example_zh,
                     screenshot_path, playback_context_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     head_id,
                     surface or dictionary_form,
                     str(item.get("reading", "") or ""),
+                    str(item.get("jlpt_level", "") or ""),
                     json.dumps(item.get("meanings") or [], ensure_ascii=False),
                     str(item.get("example_ja", "") or ""),
                     str(item.get("example_zh", "") or ""),
@@ -239,6 +248,7 @@ def _row_to_item(row: sqlite3.Row) -> dict:
         "head_id": int(row["head_id"]),
         "surface": row["surface"] or "",
         "reading": row["reading"] or "",
+        "jlpt_level": row["jlpt_level"] or "",
         "meanings": json.loads(row["meanings_json"] or "[]"),
         "example_ja": row["example_ja"] or "",
         "example_zh": row["example_zh"] or "",
@@ -307,6 +317,59 @@ def get_by_player() -> list[dict]:
         )
     result.sort(key=lambda x: (x["platform"], x["series_name"], x["episode_name"]))
     return result
+
+
+def delete_item(item_id: int) -> bool:
+    conn = _get_conn()
+    screenshot_path: str | None = None
+    head_id: int | None = None
+    playback_id: int | None = None
+    try:
+        row = conn.execute(
+            """
+            SELECT id, head_id, screenshot_path, playback_context_id
+            FROM vocab_item
+            WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+        if not row:
+            return False
+
+        head_id = int(row["head_id"])
+        playback_id = int(row["playback_context_id"]) if row["playback_context_id"] is not None else None
+        screenshot_path = row["screenshot_path"]
+
+        conn.execute("DELETE FROM vocab_item WHERE id = ?", (item_id,))
+
+        if head_id is not None:
+            remaining = conn.execute(
+                "SELECT COUNT(*) AS count FROM vocab_item WHERE head_id = ?",
+                (head_id,),
+            ).fetchone()
+            if int(remaining["count"]) == 0:
+                conn.execute("DELETE FROM vocab_head WHERE id = ?", (head_id,))
+
+        if playback_id is not None:
+            remaining = conn.execute(
+                "SELECT COUNT(*) AS count FROM vocab_item WHERE playback_context_id = ?",
+                (playback_id,),
+            ).fetchone()
+            if int(remaining["count"]) == 0:
+                conn.execute("DELETE FROM playback_context WHERE id = ?", (playback_id,))
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    if screenshot_path:
+        path = Path(screenshot_path).resolve()
+        try:
+            path.relative_to(SCREENSHOT_DIR.resolve())
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return True
 
 
 def get_item_screenshot_path(item_id: int) -> Path | None:

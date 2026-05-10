@@ -57,6 +57,8 @@ class JaTokenizeRequest(BaseModel):
 class JaToken(BaseModel):
     surface: str
     dictionary_form: str
+    reading: str = ""
+    jlpt_level: str = ""
 
 
 class JaTokenizeResponse(BaseModel):
@@ -80,6 +82,7 @@ class VocabAddItem(BaseModel):
     surface: str
     dictionary_form: str
     reading: str = ""
+    jlpt_level: str = ""
     meanings: list[str] = Field(default_factory=list)
     example_ja: str = ""
     example_zh: str = ""
@@ -109,6 +112,7 @@ class VocabItem(BaseModel):
     head_id: int
     surface: str
     reading: str
+    jlpt_level: str = ""
     meanings: list[str]
     example_ja: str
     example_zh: str
@@ -136,3 +140,22 @@ class DictLookupResponse(BaseModel):
     lemma: str
     reading: str = ""
     meanings: list[str] = Field(default_factory=list)
+
+
+class AsrTranscribeRequest(BaseModel):
+    audio_base64: str = Field(..., description="Audio chunk encoded as base64")
+    language: str = "ja"
+    with_vad: bool = True
+
+
+class AsrChunk(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
+class AsrTranscribeResponse(BaseModel):
+    language: str
+    duration: float
+    text: str
+    chunks: list[AsrChunk]

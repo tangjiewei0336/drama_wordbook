@@ -1,5 +1,6 @@
 .DS_Store
 __pycache__/
+node_modules/
 *.pyc
 *.pyo
 *.pyd
@@ -8,6 +9,9 @@ venv/
 .env
 dist/
 build/
+release/
+apps/sidecar/dist/
+apps/sidecar/build/
 
 # Local captured photos/screenshots
 apps/sidecar/app/data/screenshots/

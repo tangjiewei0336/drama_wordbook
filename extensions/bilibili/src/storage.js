@@ -89,6 +89,7 @@ export async function addRecentWords(words, maxCount = DEFAULT_SETTINGS.maxRecen
       surface: word.surface || "",
       dictionary_form: word.dictionary_form || word.surface || "",
       reading: word.reading || "",
+      jlpt_level: word.jlpt_level || "",
       meanings: Array.isArray(word.meanings) ? word.meanings : [],
       example_ja: word.example_ja || "",
       example_zh: word.example_zh || "",

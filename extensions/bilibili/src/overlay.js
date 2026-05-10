@@ -30,6 +30,14 @@ function getDefaultMeaning(token) {
   return token?.dictionary_form || token?.surface || "";
 }
 
+function pickJlptLevel(tokens, indices) {
+  return Array.from(indices)
+    .sort((a, b) => a - b)
+    .map((idx) => safeText(tokens[idx]?.jlpt_level))
+    .filter(Boolean)
+    .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))[0] || "";
+}
+
 async function lookupMeaning(lemma) {
   const res = await chrome.runtime.sendMessage({
     type: "POC_DICT_LOOKUP",
@@ -112,6 +120,8 @@ function renderOverlay(payload) {
         .filter(Boolean)
         .join("");
 
+    const getComposedJlptLevel = () => pickJlptLevel(tokens, selectedIndices);
+
     const refreshDictionaryPreview = async () => {
       const lookupKey = composedWordInput.value.trim() || getComposedTokenText();
       if (!lookupKey) {
@@ -126,13 +136,19 @@ function renderOverlay(payload) {
 
       if (dict?.meanings?.length) {
         meaningInput.value = dict.meanings.join("；");
-        readingHint.textContent = dict?.reading ? `读音: ${dict.reading}` : "";
+        const jlptLevel = getComposedJlptLevel();
+        readingHint.textContent = [dict?.reading ? `读音: ${dict.reading}` : "", jlptLevel ? `JLPT: ${jlptLevel}` : ""]
+          .filter(Boolean)
+          .join(" · ");
         dictPreview.innerHTML = `
           <div><strong>释义</strong>：${dict.meanings.join("；")}</div>
-          <div class="muted">${dict?.reading ? `读音：${dict.reading}` : "无读音信息"}</div>
+          <div class="muted">${[dict?.reading ? `读音：${dict.reading}` : "无读音信息", jlptLevel ? `JLPT：${jlptLevel}` : ""]
+            .filter(Boolean)
+            .join(" · ")}</div>
         `;
       } else {
-        readingHint.textContent = "";
+        const jlptLevel = getComposedJlptLevel();
+        readingHint.textContent = jlptLevel ? `JLPT: ${jlptLevel}` : "";
         dictPreview.innerHTML = '<span class="muted">未命中词典，请手动填写释义</span>';
       }
     };
@@ -152,10 +168,13 @@ function renderOverlay(payload) {
       const bubble = createEl(
         "button",
         `wb-overlay-token-bubble${selectedIndices.has(index) ? " active" : ""}`,
-        safeText(token.surface)
+        ""
       );
       bubble.type = "button";
-      bubble.title = safeText(token.dictionary_form || token.surface);
+      const level = safeText(token.jlpt_level);
+      bubble.title = [safeText(token.dictionary_form || token.surface), level].filter(Boolean).join(" · ");
+      bubble.appendChild(createEl("span", "", safeText(token.surface)));
+      if (level) bubble.appendChild(createEl("small", "wb-overlay-token-level", level));
       bubble.addEventListener("click", () => {
         if (selectedIndices.has(index)) {
           selectedIndices.delete(index);
@@ -182,7 +201,8 @@ function renderOverlay(payload) {
       }
       const composedSurface = safeText(composedWordInput.value).trim() || getComposedTokenText();
       const composedDictionaryForm = getComposedDictionaryForm() || composedSurface;
-      const composedReading = readingHint.textContent.replace(/^读音:\s*/, "") || getComposedReading();
+      const composedReading = readingHint.textContent.split("·")[0].replace(/^读音:\s*/, "").trim() || getComposedReading();
+      const composedJlptLevel = getComposedJlptLevel();
       const meanings = safeText(meaningInput.value)
         .split(";")
         .map((x) => x.trim())
@@ -192,6 +212,7 @@ function renderOverlay(payload) {
           surface: composedSurface,
           dictionary_form: composedDictionaryForm,
           reading: composedReading,
+          jlpt_level: composedJlptLevel,
           meanings: meanings.length ? meanings : [composedDictionaryForm || composedSurface],
           example_ja: safeText(jaTextarea.value),
           example_zh: safeText(zhTextarea.value),
