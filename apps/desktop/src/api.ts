@@ -2,8 +2,10 @@ export type VocabItem = {
   id: number;
   head_id: number;
   surface: string;
+  dictionary_form: string;
   reading: string;
   jlpt_level: string;
+  source: "manual" | "auto" | string;
   meanings: string[];
   example_ja: string;
   example_zh: string;
@@ -19,6 +21,21 @@ export type VocabItem = {
     episode_name: string;
   } | null;
   created_at: string;
+};
+
+export type JaToken = {
+  surface: string;
+  dictionary_form: string;
+  reading: string;
+  pos: string;
+  jlpt_level: string;
+  meanings: string[];
+};
+
+export type DictLookupResult = {
+  lemma: string;
+  reading: string;
+  meanings: string[];
 };
 
 export type HealthStatus = {
@@ -64,6 +81,7 @@ export type SidecarProcessStatus = {
 
 export type PlayerNode = {
   platform: string;
+  source: "manual" | "auto" | string;
   series_name: string;
   episode_name: string;
   items: VocabItem[];
@@ -115,6 +133,60 @@ export async function deleteVocabItem(itemId: number): Promise<void> {
   if (!res.ok) {
     throw new Error(`Delete failed: ${res.status}`);
   }
+}
+
+export async function updateVocabItemText(itemId: number, exampleJa: string, exampleZh: string): Promise<VocabItem> {
+  const res = await fetch(`${SIDECAR_BASE}/vocab/items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ example_ja: exampleJa, example_zh: exampleZh }),
+  });
+  if (!res.ok) {
+    throw new Error(`Update failed: ${res.status}`);
+  }
+  return (await res.json()) as VocabItem;
+}
+
+export async function tokenizeJapanese(text: string): Promise<JaToken[]> {
+  const res = await fetch(`${SIDECAR_BASE}/ja/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    throw new Error(`Tokenize failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { tokens?: JaToken[] };
+  return data.tokens || [];
+}
+
+export async function lookupDictionary(lemma: string): Promise<DictLookupResult> {
+  const res = await fetch(`${SIDECAR_BASE}/dict/lookup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lemma }),
+  });
+  if (!res.ok) {
+    throw new Error(`Dictionary lookup failed: ${res.status}`);
+  }
+  return (await res.json()) as DictLookupResult;
+}
+
+export async function deletePlayerGroup(node: PlayerNode): Promise<number> {
+  const params = new URLSearchParams({
+    platform: node.platform,
+    source: node.source || "manual",
+    series_name: node.series_name,
+    episode_name: node.episode_name,
+  });
+  const res = await fetch(`${SIDECAR_BASE}/vocab/view/by-player?${params.toString()}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(`Delete group failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { deleted_count?: number };
+  return Number(data.deleted_count || 0);
 }
 
 export function screenshotUrl(itemId: number): string {

@@ -1,6 +1,7 @@
 import {
   BookOpen,
   CalendarClock,
+  ChevronDown,
   Clapperboard,
   Cpu,
   Download,
@@ -9,22 +10,32 @@ import {
   Search,
   Server,
   Sparkles,
+  Save,
+  MessageSquareText,
+  Pencil,
   Terminal,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAsrStatus,
+  deletePlayerGroup,
   deleteVocabItem,
   fetchByPlayer,
   fetchByTime,
   fetchHeadItems,
   fetchHealth,
+  lookupDictionary,
   screenshotUrl,
   SIDECAR_BASE,
   startAsrModelLoad,
+  tokenizeJapanese,
+  updateVocabItemText,
   type AsrModelStatus,
+  type DictLookupResult,
   type HealthStatus,
+  type JaToken,
   type PlayerNode,
   type SidecarProcessStatus,
   type VocabItem,
@@ -32,9 +43,15 @@ import {
 import "./styles.css";
 
 type ViewMode = "byPlayer" | "byTime";
-type MainMode = ViewMode | "runtime";
-type SelectedSource = Pick<PlayerNode, "platform" | "series_name" | "episode_name" | "items"> | null;
+type MainMode = ViewMode | "sentences" | "runtime";
+type SelectedSource = Pick<PlayerNode, "platform" | "source" | "series_name" | "episode_name" | "items"> | null;
 type LogEntry = { id: string; at: string; level: string; source: string; message: string };
+type SentenceGroup = {
+  key: string;
+  text: string;
+  zh: string;
+  items: VocabItem[];
+};
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -66,6 +83,35 @@ function detailKey(item: VocabItem): string {
   return `${item.id}-${item.head_id}`;
 }
 
+function sourceKey(node: Pick<PlayerNode, "platform" | "source" | "series_name" | "episode_name">): string {
+  return `${node.platform}::${node.source || "manual"}::${node.series_name}::${node.episode_name}`;
+}
+
+function sourceLabel(source = "manual"): string {
+  return source === "auto" ? "自动保存" : "手动保存";
+}
+
+function hasKanji(text = ""): boolean {
+  return /[\u3400-\u9fff]/.test(text);
+}
+
+function toHiragana(text = ""): string {
+  return text.replace(/[\u30a1-\u30f6]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+}
+
+function posClass(pos = ""): string {
+  if (pos.includes("名词")) return "pos-noun";
+  if (pos.includes("动词")) return "pos-verb";
+  if (pos.includes("形容")) return "pos-adj";
+  if (pos.includes("助词") || pos.includes("助动词")) return "pos-particle";
+  if (pos.includes("副词")) return "pos-adv";
+  return "pos-other";
+}
+
+function normalizeSentenceText(item: VocabItem): string {
+  return (item.example_ja || item.surface || "").trim();
+}
+
 async function openExternal(url: string) {
   if (window.wordbookDesktop?.openExternal) {
     await window.wordbookDesktop.openExternal(url);
@@ -86,6 +132,15 @@ export default function App() {
   const [selectedItems, setSelectedItems] = useState<VocabItem[]>([]);
   const [selectedHeadId, setSelectedHeadId] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<SelectedSource>(null);
+  const [collapsedSources, setCollapsedSources] = useState<Set<string>>(new Set());
+  const [selectedSentenceId, setSelectedSentenceId] = useState<number | null>(null);
+  const [selectedSentenceKey, setSelectedSentenceKey] = useState("");
+  const [sentenceJa, setSentenceJa] = useState("");
+  const [sentenceZh, setSentenceZh] = useState("");
+  const [sentenceTokens, setSentenceTokens] = useState<JaToken[]>([]);
+  const [selectedTokenLookup, setSelectedTokenLookup] = useState<DictLookupResult | null>(null);
+  const [sentenceBusy, setSentenceBusy] = useState(false);
+  const [editingSentence, setEditingSentence] = useState(false);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -202,6 +257,55 @@ export default function App() {
     [selectedSource]
   );
   const carouselItem = carouselItems.length ? carouselItems[carouselIndex % carouselItems.length] : null;
+  const selectedSentence = useMemo(
+    () => timeItems.find((item) => item.id === selectedSentenceId) || null,
+    [timeItems, selectedSentenceId]
+  );
+  const knownWordKeys = useMemo(() => {
+    const keys = new Set<string>();
+    timeItems.forEach((item) => {
+      if (item.surface) keys.add(item.surface);
+      if (item.surface && item.surface.length > 1) keys.add(item.surface);
+      if (item.dictionary_form) keys.add(item.dictionary_form);
+      if (item.reading) keys.add(item.reading);
+      if (item.example_ja) keys.add(item.example_ja);
+    });
+    return keys;
+  }, [timeItems]);
+  const knownSentenceWords = useMemo(
+    () =>
+      Array.from(new Set(timeItems.flatMap((item) => [item.surface, item.dictionary_form]).filter(Boolean)))
+        .map(String)
+        .filter((word) => word.length > 0)
+        .sort((a, b) => b.length - a.length),
+    [timeItems]
+  );
+  const sentenceGroups = useMemo<SentenceGroup[]>(() => {
+    const groups = new Map<string, SentenceGroup>();
+    filteredTimeItems.forEach((item) => {
+      const text = normalizeSentenceText(item);
+      if (!text) return;
+      const source = item.playback?.url || item.playback?.title || "";
+      const key = `${text}::${source}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.items.push(item);
+        if (!existing.zh && item.example_zh) existing.zh = item.example_zh;
+      } else {
+        groups.set(key, {
+          key,
+          text,
+          zh: item.example_zh || "",
+          items: [item],
+        });
+      }
+    });
+    return Array.from(groups.values()).sort((a, b) => {
+      const aTime = Math.max(...a.items.map((item) => new Date(item.created_at).getTime()));
+      const bTime = Math.max(...b.items.map((item) => new Date(item.created_at).getTime()));
+      return bTime - aTime;
+    });
+  }, [filteredTimeItems]);
 
   async function onSelectHead(headId: number) {
     setLoading(true);
@@ -222,6 +326,42 @@ export default function App() {
     setSelectedHeadId(null);
     setSelectedItems([]);
     setCarouselIndex(0);
+  }
+
+  function toggleSourceCollapsed(node: PlayerNode) {
+    const key = sourceKey(node);
+    setCollapsedSources((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  async function onDeleteSourceGroup(node: PlayerNode) {
+    const label = `${sourceLabel(node.source)} · ${node.series_name} · ${node.episode_name}`;
+    if (!window.confirm(`删除这一整集的${sourceLabel(node.source)}内容？\n${label}\n\n将删除 ${node.items.length} 条例句实例，无法撤销。`)) return;
+    setLoading(true);
+    setError("");
+    try {
+      await deletePlayerGroup(node);
+      const [nodes, timeList] = await Promise.all([fetchByPlayer(), fetchByTime()]);
+      setPlayerNodes(nodes);
+      setTimeItems(timeList);
+      if (selectedSource && sourceKey(selectedSource) === sourceKey(node)) {
+        setSelectedSource(null);
+        setCarouselIndex(0);
+      }
+      if (selectedHeadId) {
+        const nextItems = await fetchHeadItems(selectedHeadId).catch(() => []);
+        setSelectedItems(nextItems);
+        if (!nextItems.length) setSelectedHeadId(null);
+      }
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function onDeleteExample(item: VocabItem) {
@@ -266,6 +406,231 @@ export default function App() {
     setLogs([]);
   }
 
+  async function analyzeSentence(text = sentenceJa) {
+    const clean = text.trim();
+    if (!clean) {
+      setSentenceTokens([]);
+      setSelectedTokenLookup(null);
+      return;
+    }
+    setSentenceBusy(true);
+    setError("");
+    try {
+      setSentenceTokens(await tokenizeJapanese(clean));
+      setSelectedTokenLookup(null);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setSentenceBusy(false);
+    }
+  }
+
+  async function onSelectSentence(item: VocabItem, groupKey = "") {
+    setSelectedSentenceId(item.id);
+    setSelectedSentenceKey(groupKey);
+    setSentenceJa(item.example_ja || item.surface);
+    setSentenceZh(item.example_zh || "");
+    setEditingSentence(false);
+    setSelectedHeadId(null);
+    setSelectedSource(null);
+    await analyzeSentence(item.example_ja || item.surface);
+  }
+
+  async function onSaveSentenceText() {
+    if (!selectedSentence) return;
+    setSentenceBusy(true);
+    setError("");
+    try {
+      const updated = await updateVocabItemText(selectedSentence.id, sentenceJa, sentenceZh);
+      setTimeItems((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      setPlayerNodes(await fetchByPlayer());
+      if (selectedSentenceKey) {
+        const group = sentenceGroups.find((entry) => entry.key === selectedSentenceKey);
+        if (group) {
+          await Promise.all(
+            group.items
+              .filter((item) => item.id !== selectedSentence.id)
+              .map((item) => updateVocabItemText(item.id, sentenceJa, sentenceZh).catch(() => null))
+          );
+          const [nodes, timeList] = await Promise.all([fetchByPlayer(), fetchByTime()]);
+          setPlayerNodes(nodes);
+          setTimeItems(timeList);
+        }
+      }
+      setEditingSentence(false);
+      await analyzeSentence(sentenceJa);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setSentenceBusy(false);
+    }
+  }
+
+  async function onLookupToken(token: JaToken) {
+    const lemma = token.dictionary_form || token.surface;
+    if (!lemma) return;
+    setSentenceBusy(true);
+    setError("");
+    try {
+      setSelectedTokenLookup(await lookupDictionary(lemma));
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setSentenceBusy(false);
+    }
+  }
+
+  function isKnownToken(token: JaToken) {
+    return knownWordKeys.has(token.surface) || knownWordKeys.has(token.dictionary_form);
+  }
+
+  function renderHighlightedSentence(text: string) {
+    const parts: Array<{ text: string; known: boolean }> = [];
+    let i = 0;
+    while (i < text.length) {
+      const match = knownSentenceWords.find((word) => word && text.startsWith(word, i));
+      if (match) {
+        parts.push({ text: match, known: true });
+        i += match.length;
+      } else {
+        parts.push({ text: text[i], known: false });
+        i += 1;
+      }
+    }
+    return parts.map((part, idx) =>
+      part.known ? <strong key={`${part.text}-${idx}`}>{part.text}</strong> : <span key={`${part.text}-${idx}`}>{part.text}</span>
+    );
+  }
+
+  function renderSentenceList() {
+    if (!sentenceGroups.length) {
+      return <div className="empty">暂无句子。保存词条后会自动出现。</div>;
+    }
+    return (
+      <div className="timeline">
+        {sentenceGroups.map((group) => {
+          const primary = group.items.find((item) => item.screenshot_path) || group.items[0];
+          return (
+            <button
+              key={group.key}
+              className={`timeline-item sentence-list-item ${selectedSentenceKey === group.key ? "active" : ""}`}
+              onClick={() => onSelectSentence(primary, group.key)}
+            >
+              <span className="timeline-word sentence-title">{renderHighlightedSentence(group.text)}</span>
+              <span className="timeline-meta">
+                {group.items.length} 词 · {primary.playback?.title || formatDate(primary.created_at)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderSentencePanel() {
+    if (!selectedSentence) {
+      return <div className="empty centered">从左侧选择一句，查看剧照、编辑文本并分析词性。</div>;
+    }
+    return (
+      <section className="sentence-panel">
+        <div className="sentence-shot">
+          {selectedSentence.screenshot_path ? (
+            <img src={screenshotUrl(selectedSentence.id)} alt={`${selectedSentence.surface} screenshot`} />
+          ) : (
+            <div className="empty centered">这句还没有剧照。</div>
+          )}
+        </div>
+        <div className="sentence-workbench">
+          <div className="sentence-analysis">
+            <div className="sentence-analysis-header">
+              <div className="section-title">
+                <MessageSquareText size={17} />
+                <span>词性标注</span>
+              </div>
+              <div className="sentence-actions">
+                <button className="icon-button" onClick={() => setEditingSentence(true)} title="编辑句子">
+                  <Pencil size={15} />
+                </button>
+                <button className="runtime-action compact" onClick={() => analyzeSentence()} disabled={sentenceBusy}>
+                  <Sparkles size={15} />
+                  <span>分析词性</span>
+                </button>
+              </div>
+            </div>
+            <div className="sentence-token-row">
+              {sentenceTokens.length ? sentenceTokens.map((token, idx) => (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  key={`${token.surface}-${idx}`}
+                  className={`sentence-token ${posClass(token.pos)} ${isKnownToken(token) ? "known" : ""}`}
+                  onClick={() => onLookupToken(token)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") onLookupToken(token);
+                  }}
+                  title="点击查词典"
+                >
+                  {hasKanji(token.surface) && token.reading ? (
+                    <ruby>
+                      <strong>{token.surface}</strong>
+                      <rt>{toHiragana(token.reading)}</rt>
+                    </ruby>
+                  ) : (
+                    <strong>{token.surface}</strong>
+                  )}
+                  <em>{[token.pos, token.jlpt_level].filter(Boolean).join(" · ")}</em>
+                </span>
+              )) : <div className="empty">点击“分析词性”生成标注。</div>}
+            </div>
+            {sentenceZh ? <div className="sentence-text-preview">{sentenceZh}</div> : null}
+            {selectedTokenLookup ? (
+              <div className="token-dict-card">
+                <strong>{selectedTokenLookup.lemma}</strong>
+                {selectedTokenLookup.reading ? <span>{selectedTokenLookup.reading}</span> : null}
+                {selectedTokenLookup.meanings.length ? (
+                  <ol>
+                    {selectedTokenLookup.meanings.map((meaning) => <li key={meaning}>{meaning}</li>)}
+                  </ol>
+                ) : <p>未查到释义。</p>}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {editingSentence ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="sentence-edit-modal">
+              <div className="modal-header">
+                <div className="section-title">
+                  <Pencil size={17} />
+                  <span>编辑句子</span>
+                </div>
+                <button className="icon-button" onClick={() => setEditingSentence(false)} title="关闭">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="sentence-editor">
+                <label>
+                  <span>日语句子</span>
+                  <textarea value={sentenceJa} onChange={(event) => setSentenceJa(event.target.value)} />
+                </label>
+                <label>
+                  <span>中文句子</span>
+                  <textarea value={sentenceZh} onChange={(event) => setSentenceZh(event.target.value)} />
+                </label>
+                <div className="sentence-actions">
+                  <button className="runtime-action compact" onClick={onSaveSentenceText} disabled={sentenceBusy}>
+                    <Save size={15} />
+                    <span>保存文本</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+
   function renderSourceList() {
     if (!playerNodes.length) {
       return <div className="empty">暂无来源。先在 B 站扩展里保存一个词条。</div>;
@@ -274,6 +639,8 @@ export default function App() {
     return (
       <div className="source-list">
         {playerNodes.map((node, idx) => {
+          const key = sourceKey(node);
+          const collapsed = collapsedSources.has(key);
           const groupedByHead = new Map<number, VocabItem[]>();
           node.items.forEach((item) => {
             const arr = groupedByHead.get(item.head_id) || [];
@@ -282,12 +649,10 @@ export default function App() {
           });
 
           return (
-            <section className="source-block" key={`${node.platform}-${node.series_name}-${node.episode_name}-${idx}`}>
+            <section className="source-block" key={`${key}-${idx}`}>
               <button
                 className={`source-heading source-heading-button ${
-                  selectedSource?.platform === node.platform &&
-                  selectedSource?.series_name === node.series_name &&
-                  selectedSource?.episode_name === node.episode_name
+                  selectedSource && sourceKey(selectedSource) === key
                     ? "active"
                     : ""
                 }`}
@@ -297,10 +662,20 @@ export default function App() {
                 <Clapperboard size={16} />
                 <div>
                   <strong>{node.series_name}</strong>
-                  <span>{node.episode_name}</span>
+                  <span>{sourceLabel(node.source)} · {node.episode_name}</span>
                 </div>
               </button>
-              <div className="word-grid">
+              <div className="source-tools">
+                <button className="source-tool-button" onClick={() => toggleSourceCollapsed(node)} title={collapsed ? "展开" : "折叠"}>
+                  <ChevronDown size={14} className={collapsed ? "collapsed" : ""} />
+                  <span>{collapsed ? "展开" : "折叠"}</span>
+                </button>
+                <button className="source-tool-button danger" onClick={() => onDeleteSourceGroup(node)} title="删除整集内容">
+                  <Trash2 size={14} />
+                  <span>删除整集</span>
+                </button>
+              </div>
+              {!collapsed ? <div className="word-grid">
                 {Array.from(groupedByHead.entries()).map(([headId, items]) => (
                   <button
                     key={headId}
@@ -312,7 +687,7 @@ export default function App() {
                     <small>{items.length}</small>
                   </button>
                 ))}
-              </div>
+              </div> : null}
             </section>
           );
         })}
@@ -475,6 +850,9 @@ export default function App() {
           <button className={view === "byTime" ? "active" : ""} onClick={() => setView("byTime")} title="按时间">
             <CalendarClock size={19} />
           </button>
+          <button className={view === "sentences" ? "active" : ""} onClick={() => setView("sentences")} title="句子">
+            <MessageSquareText size={19} />
+          </button>
           <button className={view === "runtime" ? "active" : ""} onClick={() => setView("runtime")} title="运行中心">
             <Terminal size={19} />
           </button>
@@ -483,8 +861,8 @@ export default function App() {
         {view !== "runtime" ? <section className="library-pane">
           <div className="pane-header">
             <div>
-              <span className="eyebrow">{view === "byPlayer" ? "来源浏览" : "时间线"}</span>
-              <h2>{view === "byPlayer" ? "按剧集整理" : "按保存时间"}</h2>
+              <span className="eyebrow">{view === "byPlayer" ? "来源浏览" : view === "sentences" ? "句子浏览" : "时间线"}</span>
+              <h2>{view === "byPlayer" ? "按剧集整理" : view === "sentences" ? "句子项目" : "按保存时间"}</h2>
             </div>
           </div>
 
@@ -506,12 +884,15 @@ export default function App() {
             </div>
           ) : null}
 
-          <div className="scroll-area">{view === "byPlayer" ? renderSourceList() : renderTimeList()}</div>
+          <div className="scroll-area">{view === "byPlayer" ? renderSourceList() : view === "sentences" ? renderSentenceList() : renderTimeList()}</div>
         </section> : null}
 
         <section className={view === "runtime" ? "detail-pane detail-pane-wide" : "detail-pane"}>
           {view === "runtime" ? renderRuntimePanel() : null}
+          {view === "sentences" ? renderSentencePanel() : null}
           {view !== "runtime" ? (
+          <>
+          {view !== "sentences" ? (
           <>
           {selectedSource ? (
             <section className="source-stats-panel">
@@ -627,6 +1008,8 @@ export default function App() {
               ))}
             </div>
           </section> : null}
+          </>
+          ) : null}
           </>
           ) : null}
         </section>

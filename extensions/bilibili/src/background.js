@@ -313,7 +313,7 @@ async function deleteVocabItem(itemId) {
   return res.json();
 }
 
-async function saveTokensAsVocab({ text, zhText = "", screenshotBase64 = null, playback = null, allowedJlptLevels = null }) {
+async function saveTokensAsVocab({ text, zhText = "", screenshotBase64 = null, playback = null, allowedJlptLevels = null, source = "auto" }) {
   const tokenRes = text ? await postTokenize(text) : { tokens: [] };
   const allowed = allowedJlptLevels ? new Set(allowedJlptLevels) : null;
   const seenWords = new Set();
@@ -332,6 +332,7 @@ async function saveTokensAsVocab({ text, zhText = "", screenshotBase64 = null, p
       dictionary_form: token.dictionary_form || token.surface,
       reading: token.reading || "",
       jlpt_level: token.jlpt_level || "",
+      source,
       meanings: Array.isArray(token.meanings) && token.meanings.length ? token.meanings : [token.dictionary_form || token.surface],
       example_ja: text,
       example_zh: zhText,
@@ -873,7 +874,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const words = Array.isArray(message?.words) ? message.words : [];
       const savedWords = [];
       for (const word of words) {
-        const saved = await postVocabAddOne(word);
+        const saved = await postVocabAddOne({ ...word, source: word.source || "manual" });
         if (saved) savedWords.push(saved);
       }
       const updated = await addRecentWords(savedWords, settings.maxRecentWords);

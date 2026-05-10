@@ -87,6 +87,7 @@ class VocabAddItem(BaseModel):
     dictionary_form: str
     reading: str = ""
     jlpt_level: str = ""
+    source: str = "manual"
     meanings: list[str] = Field(default_factory=list)
     example_ja: str = ""
     example_zh: str = ""
@@ -115,8 +116,10 @@ class VocabItem(BaseModel):
     id: int
     head_id: int
     surface: str
+    dictionary_form: str = ""
     reading: str
     jlpt_level: str = ""
+    source: str = "manual"
     meanings: list[str]
     example_ja: str
     example_zh: str
@@ -127,6 +130,7 @@ class VocabItem(BaseModel):
 
 class VocabByPlayerNode(BaseModel):
     platform: str
+    source: str = "manual"
     series_name: str
     episode_name: str
     items: list[VocabItem]
@@ -134,6 +138,11 @@ class VocabByPlayerNode(BaseModel):
 
 class VocabByTimeResponse(BaseModel):
     items: list[VocabItem]
+
+
+class VocabUpdateItemRequest(BaseModel):
+    example_ja: str = ""
+    example_zh: str = ""
 
 
 class DictLookupRequest(BaseModel):
