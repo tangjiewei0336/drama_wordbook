@@ -44,6 +44,7 @@ class PlaybackContextRequest(BaseModel):
     cid: str | None = None
     ep_id: str | None = None
     p: int | None = None
+    part_title: str = ""
 
 
 class PlaybackContextResponse(BaseModel):
@@ -58,7 +59,9 @@ class JaToken(BaseModel):
     surface: str
     dictionary_form: str
     reading: str = ""
+    pos: str = ""
     jlpt_level: str = ""
+    meanings: list[str] = Field(default_factory=list)
 
 
 class JaTokenizeResponse(BaseModel):
@@ -76,6 +79,7 @@ class VocabPlayback(BaseModel):
     cid: str | None = None
     ep_id: str | None = None
     p: int | None = None
+    part_title: str = ""
 
 
 class VocabAddItem(BaseModel):

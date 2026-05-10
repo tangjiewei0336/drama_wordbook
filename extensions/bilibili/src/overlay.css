@@ -5,27 +5,76 @@
   pointer-events: none;
 }
 
+video .wb-overlay-root,
+.bpx-player-container .wb-overlay-root,
+.bilibili-player-video-wrap .wb-overlay-root {
+  position: absolute;
+}
+
 .wb-overlay-mask {
   position: absolute;
   inset: 0;
-  background: rgba(15, 23, 42, 0.36);
-  backdrop-filter: blur(3px);
+  background: rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(1px);
 }
 
 .wb-overlay-card {
   position: absolute;
   width: min(520px, calc(100vw - 32px));
   max-height: min(80vh, 760px);
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(223, 229, 235, 0.92);
+  min-width: 420px;
+  min-height: 360px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(223, 229, 235, 0.78);
   border-radius: 10px;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.26);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
   padding: 16px;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+
+.wb-overlay-resize-handle {
+  position: absolute;
+  z-index: 2;
+}
+
+.wb-overlay-resize-right {
+  top: 12px;
+  right: 0;
+  width: 8px;
+  height: calc(100% - 24px);
+  cursor: ew-resize;
+}
+
+.wb-overlay-resize-bottom {
+  left: 12px;
+  bottom: 0;
+  width: calc(100% - 24px);
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.wb-overlay-resize-corner {
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+}
+
+.wb-overlay-resize-corner::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(102, 112, 133, 0.44);
+  border-bottom: 2px solid rgba(102, 112, 133, 0.44);
 }
 
 .wb-overlay-title {
@@ -82,20 +131,93 @@
 
 .wb-overlay-token-bubble {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
   border: 1px solid #dfe5eb;
   background: #fff;
   color: #344054;
-  border-radius: 999px;
-  padding: 6px 12px;
+  border-radius: 8px;
+  padding: 7px 10px;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
+.wb-overlay-token-main {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  max-width: 210px;
+}
+
+.wb-overlay-token-main-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.wb-overlay-token-surface {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 18px;
+}
+
+.wb-overlay-token-reading {
+  color: #667085;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 800;
+}
+
+.wb-overlay-token-pos {
+  flex: 0 0 auto;
+  color: #24745f;
+  background: rgba(232, 247, 241, 0.8);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 900;
+}
+
+.wb-overlay-token-delete {
+  display: none;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  color: #b84634;
+  border-radius: 999px;
+  background: rgba(255, 239, 234, 0.95);
+}
+
+.wb-overlay-token-delete svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.wb-overlay-token-meta {
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #667085;
+  font-size: 10px;
+  line-height: 13px;
+  font-weight: 700;
+}
+
 .wb-overlay-token-level {
+  align-self: flex-start;
   padding: 1px 5px;
   border-radius: 999px;
   color: #24745f;
@@ -117,6 +239,23 @@
 }
 
 .wb-overlay-token-bubble.active .wb-overlay-token-level {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.wb-overlay-token-bubble.active .wb-overlay-token-delete {
+  display: inline-flex;
+}
+
+.wb-overlay-token-bubble.active .wb-overlay-token-meta {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.wb-overlay-token-bubble.active .wb-overlay-token-reading {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.wb-overlay-token-bubble.active .wb-overlay-token-pos {
   color: #fff;
   background: rgba(255, 255, 255, 0.18);
 }

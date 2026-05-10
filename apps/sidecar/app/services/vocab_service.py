@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+
+from app.services.jlpt_service import lookup_jlpt_entry, normalize_jlpt_level
 
 DB_PATH = Path(__file__).resolve().parent.parent / "db.sqlite3"
 SCREENSHOT_DIR = Path(__file__).resolve().parent.parent / "data" / "screenshots"
@@ -119,13 +122,44 @@ def _upsert_head(conn: sqlite3.Connection, dictionary_form: str) -> int:
     return int(cur.lastrowid)
 
 
+def _normalize_vocab_item(item: dict) -> dict:
+    surface = str(item.get("surface", "") or "").strip()
+    dictionary_form = str(item.get("dictionary_form", "") or "").strip() or surface
+    reading = str(item.get("reading", "") or "").strip()
+    if len(dictionary_form) > 1 and dictionary_form.endswith("な"):
+        stripped_dictionary_form = dictionary_form[:-1]
+        stripped_reading = reading[:-1] if len(reading) > 1 and reading.endswith(("な", "ナ")) else reading
+        stripped_entry = lookup_jlpt_entry(stripped_dictionary_form, stripped_reading)
+        if stripped_entry.get("level") or stripped_entry.get("meaning"):
+            dictionary_form = stripped_dictionary_form
+            reading = stripped_reading
+            jlpt_entry = stripped_entry
+        else:
+            jlpt_entry = lookup_jlpt_entry(dictionary_form, reading)
+    else:
+        jlpt_entry = lookup_jlpt_entry(dictionary_form, reading)
+    normalized = dict(item)
+    normalized["surface"] = surface
+    normalized["dictionary_form"] = dictionary_form
+    normalized["reading"] = reading
+    normalized["jlpt_level"] = jlpt_entry.get("level", "") or normalize_jlpt_level(str(item.get("jlpt_level", "") or ""))
+    if jlpt_entry.get("meaning") and not normalized.get("meanings"):
+        normalized["meanings"] = [jlpt_entry["meaning"]]
+    return normalized
+
+
 def _insert_playback_context(conn: sqlite3.Connection, playback: dict | None) -> int | None:
     if not playback:
         return None
     now = _utc_now()
     platform = str(playback.get("platform", "bilibili"))
     title = str(playback.get("title", "") or "")
+    part_title = str(playback.get("part_title", "") or "").strip()
     series_name, episode_name = _parse_series_episode(title)
+    if part_title:
+        episode_name = part_title
+    elif playback.get("p"):
+        episode_name = f"P{int(playback.get('p') or 0)}"
     cur = conn.execute(
         """
         INSERT INTO playback_context (
@@ -153,6 +187,40 @@ def _insert_playback_context(conn: sqlite3.Connection, playback: dict | None) ->
     return int(cur.lastrowid)
 
 
+def _has_duplicate_item(
+    conn: sqlite3.Connection,
+    *,
+    head_id: int,
+    example_ja: str,
+    example_zh: str,
+    playback: dict | None,
+) -> bool:
+    current_time = float((playback or {}).get("current_time", 0.0) or 0.0)
+    title = str((playback or {}).get("title", "") or "")
+    url = str((playback or {}).get("url", "") or "")
+    rows = conn.execute(
+        """
+        SELECT i.id, p.current_time, p.title, p.url
+        FROM vocab_item i
+        LEFT JOIN playback_context p ON p.id = i.playback_context_id
+        WHERE i.head_id = ?
+          AND COALESCE(i.example_ja, '') = ?
+          AND COALESCE(i.example_zh, '') = ?
+        ORDER BY i.id DESC
+        LIMIT 20
+        """,
+        (head_id, example_ja, example_zh),
+    ).fetchall()
+    for row in rows:
+        row_time = float(row["current_time"] or 0.0)
+        row_title = str(row["title"] or "")
+        row_url = str(row["url"] or "")
+        same_media = (title and row_title == title) or (url and row_url == url) or (not title and not url)
+        if same_media and abs(row_time - current_time) <= 3.0:
+            return True
+    return False
+
+
 def _save_screenshot_base64(data: str | None) -> str | None:
     if not data:
         return None
@@ -171,20 +239,36 @@ def add_items(items: list[dict]) -> tuple[list[int], list[int]]:
     conn = _get_conn()
     head_ids: list[int] = []
     item_ids: list[int] = []
+    screenshot_cache: dict[str, str | None] = {}
     try:
         for item in items:
+            item = _normalize_vocab_item(item)
             dictionary_form = str(item.get("dictionary_form", "") or "").strip()
             surface = str(item.get("surface", "") or "").strip()
-            if not dictionary_form:
-                dictionary_form = surface
             if not dictionary_form:
                 continue
 
             head_id = _upsert_head(conn, dictionary_form)
             head_ids.append(head_id)
 
-            playback_id = _insert_playback_context(conn, item.get("playback"))
-            screenshot_path = _save_screenshot_base64(item.get("screenshot_base64"))
+            example_ja = str(item.get("example_ja", "") or "")
+            example_zh = str(item.get("example_zh", "") or "")
+            playback = item.get("playback")
+            if _has_duplicate_item(
+                conn,
+                head_id=head_id,
+                example_ja=example_ja,
+                example_zh=example_zh,
+                playback=playback,
+            ):
+                continue
+
+            playback_id = _insert_playback_context(conn, playback)
+            screenshot_base64 = item.get("screenshot_base64")
+            screenshot_key = hashlib.sha256(str(screenshot_base64).encode("utf-8")).hexdigest() if screenshot_base64 else ""
+            if screenshot_key and screenshot_key not in screenshot_cache:
+                screenshot_cache[screenshot_key] = _save_screenshot_base64(screenshot_base64)
+            screenshot_path = screenshot_cache.get(screenshot_key)
             cur = conn.execute(
                 """
                 INSERT INTO vocab_item (
@@ -198,8 +282,8 @@ def add_items(items: list[dict]) -> tuple[list[int], list[int]]:
                     str(item.get("reading", "") or ""),
                     str(item.get("jlpt_level", "") or ""),
                     json.dumps(item.get("meanings") or [], ensure_ascii=False),
-                    str(item.get("example_ja", "") or ""),
-                    str(item.get("example_zh", "") or ""),
+                    example_ja,
+                    example_zh,
                     screenshot_path,
                     playback_id,
                     _utc_now(),
@@ -365,6 +449,16 @@ def delete_item(item_id: int) -> bool:
     if screenshot_path:
         path = Path(screenshot_path).resolve()
         try:
+            conn = _get_conn()
+            try:
+                remaining = conn.execute(
+                    "SELECT COUNT(*) AS count FROM vocab_item WHERE screenshot_path = ?",
+                    (screenshot_path,),
+                ).fetchone()
+                if int(remaining["count"]) > 0:
+                    return True
+            finally:
+                conn.close()
             path.relative_to(SCREENSHOT_DIR.resolve())
             path.unlink(missing_ok=True)
         except Exception:

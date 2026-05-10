@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from app.services.jlpt_service import lookup_jlpt_level
+from app.services.jlpt_service import lookup_jlpt_entry
 
 try:
     from sudachipy import Dictionary
@@ -13,6 +13,14 @@ except Exception:  # pragma: no cover
 
 WORD_RE = re.compile(r"[ぁ-んァ-ン一-龯ー]+")
 CONTENT_POS = {"名詞", "動詞", "形容詞", "形状詞", "副詞", "連体詞"}
+POS_LABELS = {
+    "名詞": "名词",
+    "動詞": "动词",
+    "形容詞": "形容词",
+    "形状詞": "形容动词",
+    "副詞": "副词",
+    "連体詞": "连体词",
+}
 STOP_LEMMAS = {
     "は",
     "を",
@@ -27,6 +35,7 @@ STOP_LEMMAS = {
     "から",
     "まで",
     "より",
+    "一",
     "です",
     "ます",
     "だ",
@@ -41,19 +50,54 @@ def get_tokenizer():
     return Dictionary().create()
 
 
+def _meanings_from_jlpt(entry: dict) -> list[str]:
+    meaning = (entry.get("meaning") or "").strip()
+    return [meaning] if meaning else []
+
+
+def _strip_trailing_na(value: str) -> str:
+    text = (value or "").strip()
+    return text[:-1] if len(text) > 1 and text.endswith("な") else text
+
+
+def _strip_trailing_reading_na(value: str) -> str:
+    text = (value or "").strip()
+    return text[:-1] if len(text) > 1 and text.endswith(("な", "ナ")) else text
+
+
+def _normalize_fallback_form(surface: str) -> tuple[str, dict]:
+    stripped = _strip_trailing_na(surface)
+    if stripped != surface:
+        stripped_entry = lookup_jlpt_entry(stripped)
+        if stripped_entry.get("level") or stripped_entry.get("meaning"):
+            return stripped, stripped_entry
+    return surface, lookup_jlpt_entry(surface)
+
+
+def _pos_label(pos: tuple) -> str:
+    if not pos:
+        return ""
+    return POS_LABELS.get(str(pos[0]), str(pos[0]))
+
+
 def tokenize_ja(text: str) -> list[dict]:
     tokenizer = get_tokenizer()
     if tokenizer is None:
         # Fallback for POC when SudachiPy not installed.
-        return [
-            {
+        result = []
+        for w in WORD_RE.findall(text):
+            if w in STOP_LEMMAS:
+                continue
+            dictionary_form, jlpt_entry = _normalize_fallback_form(w)
+            result.append({
                 "surface": w,
-                "dictionary_form": w,
+                "dictionary_form": dictionary_form,
                 "reading": "",
-                "jlpt_level": lookup_jlpt_level(w),
-            }
-            for w in WORD_RE.findall(text)
-        ]
+                "pos": "",
+                "jlpt_level": jlpt_entry.get("level", ""),
+                "meanings": _meanings_from_jlpt(jlpt_entry),
+            })
+        return result
 
     tokens = tokenizer.tokenize(text)
     result = []
@@ -77,12 +121,18 @@ def tokenize_ja(text: str) -> list[dict]:
             reading = t.reading_form()
         except Exception:
             reading = ""
+        if pos and pos[0] == "形状詞":
+            dictionary_form = _strip_trailing_na(dictionary_form)
+            reading = _strip_trailing_reading_na(reading)
+        jlpt_entry = lookup_jlpt_entry(dictionary_form, surface, reading)
         result.append(
             {
                 "surface": surface,
                 "dictionary_form": dictionary_form,
                 "reading": reading,
-                "jlpt_level": lookup_jlpt_level(dictionary_form, surface, reading),
+                "pos": _pos_label(pos),
+                "jlpt_level": jlpt_entry.get("level", ""),
+                "meanings": _meanings_from_jlpt(jlpt_entry),
             }
         )
     return result
