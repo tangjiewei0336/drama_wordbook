@@ -90,8 +90,14 @@ jobs:
         with:
           name: desktop-${{ matrix.name }}
           path: |
-            apps/desktop/release/**
-            !apps/desktop/release/*-unpacked/**
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.msi
+            apps/desktop/release/*.pkg
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.rpm
             !apps/desktop/release/builder-*.yml
             !apps/desktop/release/latest*.yml
           if-no-files-found: error
@@ -123,7 +129,19 @@ jobs:
           title="Main build ${RUN_NUMBER} (${short_sha})"
           notes="Automated release from main at ${COMMIT_SHA}."
 
-          mapfile -d '' files < <(find artifacts -type f -print0)
+          rm -rf release-assets
+          mkdir -p release-assets
+          while IFS= read -r -d '' file; do
+            artifact_name="$(basename "$(dirname "$file")")"
+            file_name="$(basename "$file")"
+            target="release-assets/${file_name}"
+            if [ -e "$target" ]; then
+              target="release-assets/${artifact_name}-${file_name}"
+            fi
+            cp "$file" "$target"
+          done < <(find artifacts -type f -print0)
+
+          mapfile -d '' files < <(find release-assets -type f -print0)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No release artifacts found" >&2
             exit 1

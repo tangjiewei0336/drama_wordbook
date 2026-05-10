@@ -360,6 +360,7 @@ async function renderOverlay(payload) {
           dictionary_form: composedDictionaryForm,
           reading: composedReading,
           jlpt_level: composedJlptLevel,
+          source: "manual",
           meanings: meanings.length ? meanings : [composedDictionaryForm || composedSurface],
           example_ja: safeText(jaTextarea.value),
           example_zh: safeText(zhTextarea.value),

@@ -28,6 +28,7 @@ from app.models.schemas import (
     VocabByTimeResponse,
     VocabHead,
     VocabItem,
+    VocabUpdateItemRequest,
 )
 from app.services.dictionary_service import lookup_dictionary
 from app.services.asr_service import (
@@ -40,6 +41,7 @@ from app.services.ocr_service import run_ocr
 from app.services.tokenizer_service import tokenize_ja
 from app.services.vocab_service import (
     add_items,
+    delete_player_group,
     delete_item,
     get_by_player,
     get_by_time,
@@ -47,6 +49,7 @@ from app.services.vocab_service import (
     get_heads,
     get_item_screenshot_path,
     init_db,
+    update_item_text,
 )
 
 app = FastAPI(title="Drama Wordbook Sidecar", version="0.1.0")
@@ -108,6 +111,12 @@ def ja_tokenize(payload: JaTokenizeRequest):
     return JaTokenizeResponse(tokens=[JaToken(**x) for x in tokens])
 
 
+@app.post("/ja/analyze", response_model=JaTokenizeResponse)
+def ja_analyze(payload: JaTokenizeRequest):
+    tokens = tokenize_ja(payload.text, include_stop=True)
+    return JaTokenizeResponse(tokens=[JaToken(**x) for x in tokens])
+
+
 @app.post("/playback/context", response_model=PlaybackContextResponse)
 def playback_context(payload: PlaybackContextRequest):
     context_id = str(uuid4())
@@ -146,6 +155,16 @@ def vocab_delete_item(item_id: int):
     return {"ok": True, "deleted_item_id": item_id}
 
 
+@app.patch("/vocab/items/{item_id}", response_model=VocabItem)
+def vocab_update_item(item_id: int, payload: VocabUpdateItemRequest):
+    if not update_item_text(item_id, payload.example_ja, payload.example_zh):
+        raise HTTPException(status_code=404, detail="item not found")
+    items = [x for x in get_by_time() if int(x["id"]) == item_id]
+    if not items:
+        raise HTTPException(status_code=404, detail="item not found")
+    return VocabItem(**items[0])
+
+
 @app.get("/vocab/view/by-time", response_model=VocabByTimeResponse)
 def vocab_view_by_time():
     return VocabByTimeResponse(items=[VocabItem(**x) for x in get_by_time()])
@@ -157,12 +176,21 @@ def vocab_view_by_player():
     return [
         VocabByPlayerNode(
             platform=n["platform"],
+            source=n["source"],
             series_name=n["series_name"],
             episode_name=n["episode_name"],
             items=[VocabItem(**x) for x in n["items"]],
         )
         for n in nodes
     ]
+
+
+@app.delete("/vocab/view/by-player")
+def vocab_delete_player_group(platform: str, source: str, series_name: str, episode_name: str):
+    deleted_count = delete_player_group(platform, source, series_name, episode_name)
+    if deleted_count <= 0:
+        raise HTTPException(status_code=404, detail="group not found")
+    return {"ok": True, "deleted_count": deleted_count}
 
 
 @app.get("/vocab/items/{item_id}/screenshot")

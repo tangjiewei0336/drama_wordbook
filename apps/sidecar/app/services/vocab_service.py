@@ -66,6 +66,7 @@ def init_db() -> None:
                 surface TEXT NOT NULL,
                 reading TEXT,
                 jlpt_level TEXT,
+                source TEXT DEFAULT 'manual',
                 meanings_json TEXT NOT NULL,
                 example_ja TEXT,
                 example_zh TEXT,
@@ -79,6 +80,8 @@ def init_db() -> None:
         )
         if not _column_exists(conn, "vocab_item", "jlpt_level"):
             conn.execute("ALTER TABLE vocab_item ADD COLUMN jlpt_level TEXT")
+        if not _column_exists(conn, "vocab_item", "source"):
+            conn.execute("ALTER TABLE vocab_item ADD COLUMN source TEXT DEFAULT 'manual'")
         conn.commit()
     finally:
         conn.close()
@@ -142,6 +145,7 @@ def _normalize_vocab_item(item: dict) -> dict:
     normalized["surface"] = surface
     normalized["dictionary_form"] = dictionary_form
     normalized["reading"] = reading
+    normalized["source"] = "auto" if str(item.get("source", "") or "").strip().lower() == "auto" else "manual"
     normalized["jlpt_level"] = jlpt_entry.get("level", "") or normalize_jlpt_level(str(item.get("jlpt_level", "") or ""))
     if jlpt_entry.get("meaning") and not normalized.get("meanings"):
         normalized["meanings"] = [jlpt_entry["meaning"]]
@@ -272,15 +276,16 @@ def add_items(items: list[dict]) -> tuple[list[int], list[int]]:
             cur = conn.execute(
                 """
                 INSERT INTO vocab_item (
-                    head_id, surface, reading, jlpt_level, meanings_json, example_ja, example_zh,
+                    head_id, surface, reading, jlpt_level, source, meanings_json, example_ja, example_zh,
                     screenshot_path, playback_context_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     head_id,
                     surface or dictionary_form,
                     str(item.get("reading", "") or ""),
                     str(item.get("jlpt_level", "") or ""),
+                    str(item.get("source", "manual") or "manual"),
                     json.dumps(item.get("meanings") or [], ensure_ascii=False),
                     example_ja,
                     example_zh,
@@ -331,8 +336,10 @@ def _row_to_item(row: sqlite3.Row) -> dict:
         "id": int(row["id"]),
         "head_id": int(row["head_id"]),
         "surface": row["surface"] or "",
+        "dictionary_form": row["dictionary_form"] or "",
         "reading": row["reading"] or "",
         "jlpt_level": row["jlpt_level"] or "",
+        "source": row["source"] or "manual",
         "meanings": json.loads(row["meanings_json"] or "[]"),
         "example_ja": row["example_ja"] or "",
         "example_zh": row["example_zh"] or "",
@@ -347,9 +354,10 @@ def get_head_items(head_id: int) -> list[dict]:
     try:
         rows = conn.execute(
             """
-            SELECT i.*, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
+            SELECT i.*, h.dictionary_form, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
                    p.series_name, p.episode_name
             FROM vocab_item i
+            LEFT JOIN vocab_head h ON h.id = i.head_id
             LEFT JOIN playback_context p ON p.id = i.playback_context_id
             WHERE i.head_id = ?
             ORDER BY i.created_at DESC
@@ -366,9 +374,10 @@ def get_by_time() -> list[dict]:
     try:
         rows = conn.execute(
             """
-            SELECT i.*, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
+            SELECT i.*, h.dictionary_form, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
                    p.series_name, p.episode_name
             FROM vocab_item i
+            LEFT JOIN vocab_head h ON h.id = i.head_id
             LEFT JOIN playback_context p ON p.id = i.playback_context_id
             ORDER BY i.created_at DESC
             """
@@ -380,20 +389,22 @@ def get_by_time() -> list[dict]:
 
 def get_by_player() -> list[dict]:
     items = get_by_time()
-    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    grouped: dict[tuple[str, str, str, str], list[dict]] = {}
     for item in items:
         playback = item.get("playback") or {}
         platform = playback.get("platform") or "unknown"
+        source = item.get("source") or "manual"
         series_name = playback.get("series_name") or playback.get("title") or "unknown"
         episode_name = playback.get("episode_name") or playback.get("title") or "unknown"
-        key = (platform, series_name, episode_name)
+        key = (platform, source, series_name, episode_name)
         grouped.setdefault(key, []).append(item)
 
     result = []
-    for (platform, series_name, episode_name), grouped_items in grouped.items():
+    for (platform, source, series_name, episode_name), grouped_items in grouped.items():
         result.append(
             {
                 "platform": platform,
+                "source": source,
                 "series_name": series_name,
                 "episode_name": episode_name,
                 "items": grouped_items,
@@ -401,6 +412,40 @@ def get_by_player() -> list[dict]:
         )
     result.sort(key=lambda x: (x["platform"], x["series_name"], x["episode_name"]))
     return result
+
+
+def delete_player_group(platform: str, source: str, series_name: str, episode_name: str) -> int:
+    items = get_by_time()
+    target_ids = [
+        int(item["id"])
+        for item in items
+        if (item.get("playback") or {}).get("platform", "unknown") == platform
+        and (item.get("source") or "manual") == source
+        and ((item.get("playback") or {}).get("series_name") or (item.get("playback") or {}).get("title") or "unknown") == series_name
+        and ((item.get("playback") or {}).get("episode_name") or (item.get("playback") or {}).get("title") or "unknown") == episode_name
+    ]
+    deleted = 0
+    for item_id in target_ids:
+        if delete_item(item_id):
+            deleted += 1
+    return deleted
+
+
+def update_item_text(item_id: int, example_ja: str, example_zh: str) -> bool:
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE vocab_item
+            SET example_ja = ?, example_zh = ?
+            WHERE id = ?
+            """,
+            (example_ja, example_zh, item_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
 
 
 def delete_item(item_id: int) -> bool:
