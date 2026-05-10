@@ -17,6 +17,18 @@ pip install -e .
 uvicorn app.main:app --host 127.0.0.1 --port 17321 --reload
 ```
 
+默认不会在启动时下载 ASR 模型；第一次点击插件里的「开始语音识别」时才会按需加载 `faster-whisper` 模型。若希望启动时提前加载，可显式开启：
+
+```bash
+ASR_PRELOAD=1 uvicorn app.main:app --host 127.0.0.1 --port 17321 --reload
+```
+
+如果 Hugging Face 下载不稳定，可以指定镜像或本地缓存目录：
+
+```bash
+ASR_HF_ENDPOINT=https://hf-mirror.com ASR_MODEL_DOWNLOAD_ROOT=.models uvicorn app.main:app --host 127.0.0.1 --port 17321 --reload
+```
+
 ## 3. 检查服务
 
 打开浏览器访问：
@@ -31,5 +43,6 @@ uvicorn app.main:app --host 127.0.0.1 --port 17321 --reload
 - `POST /ja/tokenize`
 - `POST /playback/context`
 - `GET /playback/context/{context_id}`
+- `POST /asr/transcribe`
 
 > 说明：这是试验版本。`/playback/context` 当前是内存存储，重启后会清空。

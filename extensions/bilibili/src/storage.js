@@ -89,6 +89,8 @@ export async function addRecentWords(words, maxCount = DEFAULT_SETTINGS.maxRecen
       surface: word.surface || "",
       dictionary_form: word.dictionary_form || word.surface || "",
       reading: word.reading || "",
+      jlpt_level: word.jlpt_level || "",
+      vocab_item_id: word.vocab_item_id || null,
       meanings: Array.isArray(word.meanings) ? word.meanings : [],
       example_ja: word.example_ja || "",
       example_zh: word.example_zh || "",
@@ -100,4 +102,12 @@ export async function addRecentWords(words, maxCount = DEFAULT_SETTINGS.maxRecen
   const merged = [...normalized, ...current].slice(0, maxCount);
   await chrome.storage.local.set({ [RECENT_WORDS_KEY]: merged });
   return merged;
+}
+
+export async function removeRecentWordByVocabItemId(vocabItemId) {
+  const current = await getRecentWords();
+  const target = Number(vocabItemId || 0);
+  const next = current.filter((word) => Number(word.vocab_item_id || 0) !== target);
+  await chrome.storage.local.set({ [RECENT_WORDS_KEY]: next });
+  return next;
 }

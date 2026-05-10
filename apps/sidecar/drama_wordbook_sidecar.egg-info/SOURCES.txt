@@ -5,8 +5,11 @@ app/main.py
 app/models/__init__.py
 app/models/schemas.py
 app/services/__init__.py
+app/services/asr_service.py
+app/services/dictionary_service.py
 app/services/ocr_service.py
 app/services/tokenizer_service.py
+app/services/vocab_service.py
 drama_wordbook_sidecar.egg-info/PKG-INFO
 drama_wordbook_sidecar.egg-info/SOURCES.txt
 drama_wordbook_sidecar.egg-info/dependency_links.txt

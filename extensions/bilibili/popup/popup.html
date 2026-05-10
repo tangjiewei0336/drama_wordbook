@@ -2,48 +2,180 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <title>Wordbook 最近词条</title>
+    <title>Drama Wordbook</title>
     <style>
+      * { box-sizing: border-box; }
       body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        width: 380px;
+        width: 410px;
         margin: 0;
-        padding: 12px 12px 10px 12px;
-        background: #f7f8fa;
+        padding: 14px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #18202b;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.93), rgba(247, 248, 251, 0.97)),
+          radial-gradient(circle at 10% 0%, rgba(214, 95, 74, 0.14), transparent 30%),
+          radial-gradient(circle at 88% 8%, rgba(46, 143, 118, 0.14), transparent 34%),
+          #f7f8fb;
       }
       .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-bottom: 10px;
+        gap: 12px;
+        margin-bottom: 12px;
       }
       .title {
-        font-size: 14px;
-        font-weight: 600;
-        color: #1d1d1f;
+        font-size: 16px;
+        font-weight: 800;
       }
-      .actions {
+      .icon-actions {
         display: flex;
-        gap: 6px;
+        gap: 7px;
       }
       button {
-        border: none;
-        border-radius: 6px;
-        background: #e9edf3;
-        color: #1d1d1f;
+        border: 1px solid #dfe5eb;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.94);
+        color: #344054;
         cursor: pointer;
-        padding: 6px 8px;
+        padding: 8px 10px;
         font-size: 12px;
+        font-weight: 800;
+        transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
       }
-      #list {
-        max-height: 420px;
+      button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(46, 143, 118, 0.45);
+        background: #f1faf6;
+      }
+      .mode-option:hover {
+        transform: none;
+        background: transparent;
+      }
+      .mode-option.active:hover {
+        color: #fff;
+      }
+      .mode-card,
+      .meter-wrap,
+      .word-item {
+        border: 1px solid #e7ebef;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 10px 24px rgba(32, 41, 54, 0.06);
+      }
+      .mode-card {
+        padding: 11px;
+        margin-bottom: 10px;
+      }
+      .mode-switch {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 4px;
+        padding: 4px;
+        border-radius: 10px;
+        background: #edf1f5;
+      }
+      .mode-thumb {
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        width: calc((100% - 8px) / 3);
+        height: calc(100% - 8px);
+        border-radius: 8px;
+        background: #263241;
+        box-shadow: 0 8px 18px rgba(24, 32, 43, 0.16);
+        transition: transform 0.18s ease;
+      }
+      .mode-switch[data-mode="auto"] .mode-thumb { transform: translateX(100%); }
+      .mode-switch[data-mode="asr"] .mode-thumb { transform: translateX(200%); }
+      .mode-option {
+        position: relative;
+        z-index: 1;
+        height: 32px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+      }
+      .mode-option.active {
+        color: #fff;
+      }
+      .primary-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .primary-row.has-stop {
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+      .primary-action {
+        color: #fff;
+        background: #2e8f76;
+        border-color: #2e8f76;
+      }
+      .stop-action {
+        min-width: 76px;
+        color: #b84634;
+        background: #fff2ee;
+        border-color: #f2c7bd;
+      }
+      .filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 10px;
+      }
+      .level-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 8px;
+        border: 1px solid #dfe5eb;
+        border-radius: 999px;
+        color: #475467;
+        background: #fff;
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .level-toggle input {
+        accent-color: #2e8f76;
+      }
+      .meter-wrap {
+        margin: 10px 0;
+        padding: 11px;
+      }
+      .meter-title {
+        margin-bottom: 6px;
+        color: #475467;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .meter-track {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: #edf1f5;
+        overflow: hidden;
+      }
+      .meter-fill {
+        width: 0%;
+        height: 100%;
+        background: linear-gradient(90deg, #2e8f76, #e0a33a, #d65f4a);
+        transition: width 0.2s ease;
+      }
+      .meter-meta {
+        margin-top: 6px;
+        color: #667085;
+        font-size: 11px;
+      }
+      #list,
+      #asrList {
+        max-height: 250px;
         overflow: auto;
       }
       .word-item {
-        background: #fff;
-        border: 1px solid #e6ebf1;
-        border-radius: 10px;
-        padding: 10px;
+        padding: 11px;
         margin-bottom: 8px;
       }
       .word-head {
@@ -52,45 +184,73 @@
         gap: 8px;
       }
       .surface {
-        font-size: 15px;
-        font-weight: 600;
+        font-size: 16px;
+        font-weight: 800;
       }
-      .reading {
-        color: #666;
+      .reading,
+      .meta,
+      .empty {
+        color: #667085;
         font-size: 12px;
       }
       .meaning {
         margin-top: 6px;
-        font-size: 12px;
-        color: #333;
+        color: #344054;
+        font-size: 13px;
+        line-height: 1.45;
       }
       .meta {
         margin-top: 6px;
-        font-size: 11px;
-        color: #666;
+        line-height: 1.45;
       }
       .empty {
-        color: #666;
-        font-size: 12px;
-        padding: 12px 4px;
+        padding: 14px 4px;
       }
       .status {
-        margin-top: 8px;
+        margin-top: 10px;
+        min-height: 18px;
+        color: #24745f;
         font-size: 12px;
-        color: #1677ff;
+        font-weight: 800;
       }
     </style>
   </head>
   <body>
     <div class="topbar">
-      <div class="title">最近添加词语</div>
-      <div class="actions">
-        <button id="captureBtn">手动截图识别</button>
-        <button id="dashboardBtn">统计界面</button>
-        <button id="syncBtn">同步播放</button>
-        <button id="settingsBtn">设置</button>
+      <div class="title">Drama Wordbook</div>
+      <div class="icon-actions">
+        <button id="dashboardBtn" title="统计">统计</button>
+        <button id="settingsBtn" title="设置">设置</button>
       </div>
     </div>
+
+    <section class="mode-card">
+      <div id="modeSwitch" class="mode-switch" data-mode="manual">
+        <div class="mode-thumb"></div>
+        <button class="mode-option active" data-mode="manual">手动</button>
+        <button class="mode-option" data-mode="auto">字幕自动</button>
+        <button class="mode-option" data-mode="asr">ASR</button>
+      </div>
+      <div class="filter-row" id="jlptFilters">
+        <label class="level-toggle"><input type="checkbox" value="N1" /> N1</label>
+        <label class="level-toggle"><input type="checkbox" value="N2" /> N2</label>
+        <label class="level-toggle"><input type="checkbox" value="N3" /> N3</label>
+        <label class="level-toggle"><input type="checkbox" value="N4" /> N4</label>
+        <label class="level-toggle"><input type="checkbox" value="N5" /> N5</label>
+      </div>
+      <div class="primary-row">
+        <button id="primaryModeBtn" class="primary-action">手动截图识别</button>
+        <button id="stopModeBtn" class="stop-action">停止</button>
+      </div>
+    </section>
+
+    <div id="meterWrap" class="meter-wrap">
+      <div class="meter-title">音轨电平</div>
+      <div class="meter-track"><div id="audioMeterFill" class="meter-fill"></div></div>
+      <div id="audioMeterMeta" class="meter-meta">等待采样...</div>
+    </div>
+
+    <div id="asrList"></div>
     <div id="list"></div>
     <div id="status" class="status"></div>
     <script src="./popup.js"></script>

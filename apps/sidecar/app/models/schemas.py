@@ -44,6 +44,7 @@ class PlaybackContextRequest(BaseModel):
     cid: str | None = None
     ep_id: str | None = None
     p: int | None = None
+    part_title: str = ""
 
 
 class PlaybackContextResponse(BaseModel):
@@ -57,6 +58,10 @@ class JaTokenizeRequest(BaseModel):
 class JaToken(BaseModel):
     surface: str
     dictionary_form: str
+    reading: str = ""
+    pos: str = ""
+    jlpt_level: str = ""
+    meanings: list[str] = Field(default_factory=list)
 
 
 class JaTokenizeResponse(BaseModel):
@@ -74,12 +79,14 @@ class VocabPlayback(BaseModel):
     cid: str | None = None
     ep_id: str | None = None
     p: int | None = None
+    part_title: str = ""
 
 
 class VocabAddItem(BaseModel):
     surface: str
     dictionary_form: str
     reading: str = ""
+    jlpt_level: str = ""
     meanings: list[str] = Field(default_factory=list)
     example_ja: str = ""
     example_zh: str = ""
@@ -109,6 +116,7 @@ class VocabItem(BaseModel):
     head_id: int
     surface: str
     reading: str
+    jlpt_level: str = ""
     meanings: list[str]
     example_ja: str
     example_zh: str
@@ -136,3 +144,22 @@ class DictLookupResponse(BaseModel):
     lemma: str
     reading: str = ""
     meanings: list[str] = Field(default_factory=list)
+
+
+class AsrTranscribeRequest(BaseModel):
+    audio_base64: str = Field(..., description="Audio chunk encoded as base64")
+    language: str = "ja"
+    with_vad: bool = True
+
+
+class AsrChunk(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
+class AsrTranscribeResponse(BaseModel):
+    language: str
+    duration: float
+    text: str
+    chunks: list[AsrChunk]

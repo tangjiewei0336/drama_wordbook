@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.models.schemas import (
+    AsrChunk,
+    AsrTranscribeRequest,
+    AsrTranscribeResponse,
     DictLookupRequest,
     DictLookupResponse,
     JaToken,
@@ -27,10 +30,17 @@ from app.models.schemas import (
     VocabItem,
 )
 from app.services.dictionary_service import lookup_dictionary
+from app.services.asr_service import (
+    get_asr_status,
+    preload_asr_model,
+    start_asr_model_load,
+    transcribe_audio_chunk,
+)
 from app.services.ocr_service import run_ocr
 from app.services.tokenizer_service import tokenize_ja
 from app.services.vocab_service import (
     add_items,
+    delete_item,
     get_by_player,
     get_by_time,
     get_head_items,
@@ -55,6 +65,7 @@ logger = logging.getLogger("wordbook.sidecar")
 @app.on_event("startup")
 def on_startup():
     init_db()
+    preload_asr_model()
 
 
 @app.get("/health")
@@ -63,6 +74,7 @@ def health():
         "status": "ok",
         "service": "drama-wordbook-sidecar",
         "time": datetime.now(timezone.utc).isoformat(),
+        "asr": get_asr_status(),
     }
 
 
@@ -127,6 +139,13 @@ def vocab_head_items(head_id: int):
     return [VocabItem(**x) for x in get_head_items(head_id)]
 
 
+@app.delete("/vocab/items/{item_id}")
+def vocab_delete_item(item_id: int):
+    if not delete_item(item_id):
+        raise HTTPException(status_code=404, detail="item not found")
+    return {"ok": True, "deleted_item_id": item_id}
+
+
 @app.get("/vocab/view/by-time", response_model=VocabByTimeResponse)
 def vocab_view_by_time():
     return VocabByTimeResponse(items=[VocabItem(**x) for x in get_by_time()])
@@ -158,3 +177,28 @@ def vocab_item_screenshot(item_id: int):
 def dict_lookup(payload: DictLookupRequest):
     result = lookup_dictionary(payload.lemma)
     return DictLookupResponse(**result)
+
+
+@app.post("/asr/transcribe", response_model=AsrTranscribeResponse)
+def asr_transcribe(payload: AsrTranscribeRequest):
+    result = transcribe_audio_chunk(
+        payload.audio_base64,
+        language=payload.language,
+        with_vad=payload.with_vad,
+    )
+    return AsrTranscribeResponse(
+        language=result["language"],
+        duration=result["duration"],
+        text=result["text"],
+        chunks=[AsrChunk(**x) for x in result["chunks"]],
+    )
+
+
+@app.get("/asr/status")
+def asr_status():
+    return get_asr_status()
+
+
+@app.post("/asr/model/load")
+def asr_model_load():
+    return start_asr_model_load()
