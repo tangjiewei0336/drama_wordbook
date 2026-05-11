@@ -187,6 +187,14 @@ def init_db() -> None:
                     created_at TEXT NOT NULL,
                     responded_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS invite_code (
+                    id BIGSERIAL PRIMARY KEY,
+                    code TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    used_by_username TEXT NOT NULL DEFAULT '',
+                    used_at TEXT
+                );
                 """
             )
             cols = {
@@ -258,6 +266,14 @@ def init_db() -> None:
                     FOREIGN KEY(from_user_id) REFERENCES "user"(id),
                     FOREIGN KEY(to_user_id) REFERENCES "user"(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS invite_code (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    used_by_username TEXT NOT NULL DEFAULT '',
+                    used_at TEXT
+                );
                 """
             )
             cols = {row["name"] for row in db.execute('PRAGMA table_info("user")').fetchall()}
@@ -276,6 +292,15 @@ def password_hash(password: str, salt: str) -> str:
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _normalize_invite_code(code: str) -> str:
+    return str(code or "").strip().upper()
+
+
+def _generate_invite_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(alphabet[int(secrets.randbelow(len(alphabet)))] for _ in range(10))
 
 
 def _save_share_screenshot(data: str) -> str:
@@ -488,6 +513,7 @@ def _snapshot_for_version(db: sqlite3.Connection, user_id: int, version: int) ->
 class AuthPayload(BaseModel):
     username: str
     password: str
+    invite_code: str = ""
 
 
 class PartnerPayload(BaseModel):
@@ -515,6 +541,10 @@ class PartnerRequestPayload(BaseModel):
 class AdminResetPasswordPayload(BaseModel):
     username: str
     password: str
+
+
+class AdminInviteCodePayload(BaseModel):
+    code: str = ""
 
 
 app = FastAPI(title="Drama Wordbook Server", version="0.1.0")
@@ -613,6 +643,27 @@ def admin_reset_password(payload: AdminResetPasswordPayload, _ok: bool = Depends
     if cur.rowcount <= 0:
         raise HTTPException(status_code=404, detail="user not found")
     return {"ok": True, "username": username}
+
+
+@app.post("/admin/invite-codes")
+def admin_create_invite_code(payload: AdminInviteCodePayload, _ok: bool = Depends(require_admin)):
+    code = _normalize_invite_code(payload.code)
+    if not code:
+        code = _generate_invite_code()
+    try:
+        with conn() as db:
+            db.execute(
+                """
+                INSERT INTO invite_code (code, created_at, used_by_username, used_at)
+                VALUES (?, ?, '', NULL)
+                """,
+                (code, utc_now()),
+            )
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise HTTPException(status_code=409, detail="invite code already exists") from exc
+        raise
+    return {"ok": True, "code": code}
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -774,13 +825,26 @@ def admin_page(_ok: bool = Depends(require_admin)):
 @app.post("/auth/register")
 def register(payload: AuthPayload):
     username = payload.username.strip()
+    invite_code = _normalize_invite_code(payload.invite_code)
     if len(username) < 3 or len(payload.password) < 8:
         raise HTTPException(status_code=400, detail="username >= 3 and password >= 8 required")
+    if not invite_code:
+        raise HTTPException(status_code=400, detail="invite code is required")
     salt = secrets.token_hex(16)
     token = secrets.token_urlsafe(32)
     now = utc_now()
     try:
         with conn() as db:
+            invite_cur = db.execute(
+                """
+                UPDATE invite_code
+                SET used_by_username = ?, used_at = ?
+                WHERE code = ? AND used_at IS NULL
+                """,
+                (username, now, invite_code),
+            )
+            if invite_cur.rowcount <= 0:
+                raise HTTPException(status_code=400, detail="invite code is invalid or already used")
             db.execute(
                 """
                 INSERT INTO "user" (username, password_hash, salt, token_hash, created_at, updated_at)

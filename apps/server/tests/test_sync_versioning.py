@@ -23,9 +23,12 @@ class SyncVersioningTest(unittest.TestCase):
         cls.client = TestClient(module.app)
 
     def _register(self, username: str) -> str:
+        invite_res = self.client.post("/admin/invite-codes?token=drama-debug", json={})
+        self.assertEqual(invite_res.status_code, 200, invite_res.text)
+        invite_code = invite_res.json()["code"]
         response = self.client.post(
             "/auth/register",
-            json={"username": username, "password": "password123"},
+            json={"username": username, "password": "password123", "invite_code": invite_code},
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["access_token"]

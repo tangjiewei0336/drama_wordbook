@@ -223,6 +223,7 @@ class SyncLoginRequest(BaseModel):
     server_url: str
     username: str
     password: str
+    invite_code: str = ""
 
 
 class SyncRunRequest(BaseModel):

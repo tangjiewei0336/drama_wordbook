@@ -1790,10 +1790,15 @@ button {
 .desktop-settings-panel {
   display: grid;
   gap: 8px;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid #e7ebef;
   border-radius: 8px;
   background: #fbfcfd;
+}
+
+.desktop-settings-error {
+  border-color: rgba(214, 95, 74, 0.2);
+  background: #fff7f5;
 }
 
 .setting-toggle {

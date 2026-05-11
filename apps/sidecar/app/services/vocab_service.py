@@ -1201,10 +1201,10 @@ def login_sync_server(server_url: str, username: str, password: str) -> dict:
     return config
 
 
-def register_sync_server(server_url: str, username: str, password: str) -> dict:
+def register_sync_server(server_url: str, username: str, password: str, invite_code: str = "") -> dict:
     clean_url = _normalized_server_url(server_url)
     _reset_sync_session({"server_url": clean_url})
-    body = json.dumps({"username": username, "password": password}).encode("utf-8")
+    body = json.dumps({"username": username, "password": password, "invite_code": str(invite_code or "").strip()}).encode("utf-8")
     req = urlrequest.Request(
         f"{clean_url}/auth/register",
         data=body,

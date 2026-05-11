@@ -55,6 +55,9 @@
       "output": "release"
     },
     "mac": {
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
       "target": ["dmg", "zip"],
       "category": "public.app-category.education"
     },

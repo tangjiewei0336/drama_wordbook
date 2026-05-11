@@ -307,11 +307,11 @@ export async function loginSync(serverUrl: string, username: string, password: s
   return (await res.json()) as SyncConfig;
 }
 
-export async function registerSync(serverUrl: string, username: string, password: string): Promise<SyncConfig> {
+export async function registerSync(serverUrl: string, username: string, password: string, inviteCode = ""): Promise<SyncConfig> {
   const res = await fetch(`${SIDECAR_BASE}/sync/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ server_url: serverUrl, username, password }),
+    body: JSON.stringify({ server_url: serverUrl, username, password, invite_code: inviteCode }),
   });
   if (!res.ok) throw new Error(await parseApiError(res, `注册失败（${res.status}）`));
   return (await res.json()) as SyncConfig;
