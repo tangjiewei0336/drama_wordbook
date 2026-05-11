@@ -404,7 +404,7 @@ def sync_login(payload: SyncLoginRequest):
 @app.post("/sync/register", response_model=SyncConfig)
 def sync_register(payload: SyncLoginRequest):
     try:
-        config = register_sync_server(payload.server_url, payload.username, payload.password)
+        config = register_sync_server(payload.server_url, payload.username, payload.password, payload.invite_code)
         return SyncConfig(**config)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

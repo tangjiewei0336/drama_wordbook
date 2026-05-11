@@ -142,6 +142,25 @@ function withPlaybackTime(url: string, currentTime = 0): string {
   }
 }
 
+function normalizeSyncAuthError(raw: unknown): string {
+  const text = String((raw as Error)?.message || raw || "").trim();
+  if (!text) return "登录失败，请稍后重试。";
+  if (text.includes("invalid username or password")) return "账号不存在或密码错误。";
+  if (text.includes("username already exists")) return "该用户名已注册，请直接登录。";
+  if (text.includes("invite code is required")) return "注册需要邀请码。";
+  if (text.includes("invite code is invalid or already used")) return "邀请码无效或已被使用。";
+  return text;
+}
+
+function normalizeSpaceError(raw: unknown): string {
+  const text = String((raw as Error)?.message || raw || "").trim();
+  if (!text) return "操作未完成，请稍后重试。";
+  if (text.includes("partner not found")) return "找不到搭子账号，请确认用户名。";
+  if (text.includes("you already have a partner")) return "你已经有搭子了，不能再发送申请。";
+  if (text.includes("target already has a partner")) return "对方已经有搭子了。";
+  return text;
+}
+
 function uniqueMeanings(items: VocabItem[]): string[] {
   return Array.from(
     new Set(items.flatMap((item) => item.meanings || []).map((item) => String(item).trim()).filter(Boolean))
@@ -254,8 +273,9 @@ export default function App() {
   });
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [desktopSettingBusy, setDesktopSettingBusy] = useState(false);
+  const [desktopSettingsError, setDesktopSettingsError] = useState("");
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ server_url: "", access_token: "", username: "", last_sync_at: "", last_server_version: 0, auto_sync_interval_minutes: 0 });
-  const [loginForm, setLoginForm] = useState({ serverUrl: "", username: "", password: "" });
+  const [loginForm, setLoginForm] = useState({ serverUrl: "", username: "", password: "", inviteCode: "" });
   const [selectedItems, setSelectedItems] = useState<VocabItem[]>([]);
   const [selectedHeadId, setSelectedHeadId] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<SelectedSource>(null);
@@ -271,6 +291,10 @@ export default function App() {
   const [sharingSentence, setSharingSentence] = useState(false);
   const [shareComment, setShareComment] = useState("");
   const [replyDraftByShare, setReplyDraftByShare] = useState<Record<number, string>>({});
+  const [syncError, setSyncError] = useState("");
+  const [spaceError, setSpaceError] = useState("");
+  const [libraryError, setLibraryError] = useState("");
+  const [profileError, setProfileError] = useState("");
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [avatarSelectingId, setAvatarSelectingId] = useState("");
@@ -282,7 +306,6 @@ export default function App() {
   const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
   const [resolvingConflictKey, setResolvingConflictKey] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const isSidecarOnline = Boolean(sidecarStatus?.healthy || health);
   const appStyle = { "--theme-color": profile.theme_color, "--partner-color": "#d65f4a" } as CSSProperties;
   const serviceText = sidecarStatus
@@ -300,7 +323,7 @@ export default function App() {
 
   async function loadAll(keepSelection = true) {
     setLoading(true);
-    setError("");
+    setLibraryError("");
     try {
       const [healthRes, nodes, timeList, sentenceList, profileRes, syncRes, spaceRes, desktopSettingRes] = await Promise.all([
         fetchHealth(),
@@ -333,7 +356,7 @@ export default function App() {
       }
     } catch (err) {
       setHealth(null);
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -400,14 +423,14 @@ export default function App() {
         if (result.state === "needs_pull") {
           const conflictsRes = await fetchSyncConflicts().catch(() => ({ items: [] as SyncConflict[] }));
           setSyncConflicts(conflictsRes.items || []);
-          setError(result.message || "云端有新变化，请先下载云端更新");
+          setProfileError(result.message || "云端有新变化，请先下载云端更新");
           return;
         }
         setSyncConfig(await fetchSyncConfig());
         setSyncConflicts([]);
         setSpace(await fetchDramaSpace());
       } catch (err) {
-        setError(`自动同步失败：${String((err as Error).message || err)}`);
+        setProfileError(`自动同步失败：${String((err as Error).message || err)}`);
       } finally {
         autoSyncRunningRef.current = false;
       }
@@ -512,13 +535,13 @@ export default function App() {
 
   async function onSelectHead(headId: number) {
     setLoading(true);
-    setError("");
+    setLibraryError("");
     try {
       setSelectedHeadId(headId);
       setSelectedSource(null);
       setSelectedItems(await fetchHeadItems(headId));
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -545,7 +568,7 @@ export default function App() {
     const label = `${sourceLabel(node.source)} · ${node.series_name} · ${node.episode_name}`;
     if (!window.confirm(`删除这一整集的${sourceLabel(node.source)}内容？\n${label}\n\n将删除 ${node.items.length} 条例句实例，无法撤销。`)) return;
     setLoading(true);
-    setError("");
+    setLibraryError("");
     try {
       await deletePlayerGroup(node);
       const [nodes, timeList] = await Promise.all([fetchByPlayer(), fetchByTime()]);
@@ -561,7 +584,7 @@ export default function App() {
         if (!nextItems.length) setSelectedHeadId(null);
       }
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -570,7 +593,7 @@ export default function App() {
   async function onDeleteExample(item: VocabItem) {
     if (!window.confirm(`删除这条例句？\n${item.example_ja || item.surface}`)) return;
     setLoading(true);
-    setError("");
+    setLibraryError("");
     try {
       await deleteVocabItem(item.id);
       const [nodes, timeList] = await Promise.all([fetchByPlayer(), fetchByTime()]);
@@ -582,25 +605,25 @@ export default function App() {
         if (!nextItems.length) setSelectedHeadId(null);
       }
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
   }
 
   async function onRestartSidecar() {
-    setError("");
+    setLibraryError("");
     await window.wordbookDesktop?.restartSidecar?.();
     setTimeout(() => loadAll(true), 1200);
   }
 
   async function onStartModelLoad() {
-    setError("");
+    setLibraryError("");
     try {
       setAsrStatus(await startAsrModelLoad());
       setView("runtime");
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     }
   }
 
@@ -617,12 +640,12 @@ export default function App() {
       return;
     }
     setSentenceBusy(true);
-    setError("");
+    setLibraryError("");
     try {
       setSentenceTokens(await tokenizeJapanese(clean));
       setSelectedTokenLookup(null);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setSentenceBusy(false);
     }
@@ -642,7 +665,7 @@ export default function App() {
   async function onSaveSentenceText() {
     if (!selectedSentence) return;
     setSentenceBusy(true);
-    setError("");
+    setLibraryError("");
     try {
       const updated = await updateSentence(selectedSentence.id, sentenceJa, sentenceZh, selectedSentence.tags || []);
       setSentences((items) => items.map((item) => (item.id === updated.id ? updated : item)));
@@ -664,7 +687,7 @@ export default function App() {
       setEditingSentence(false);
       await analyzeSentence(sentenceJa);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setSentenceBusy(false);
     }
@@ -676,7 +699,7 @@ export default function App() {
     const suffix = wordCount ? `\n\n同时会删除和这句绑定的 ${wordCount} 个单词。` : "";
     if (!window.confirm(`删除这句？\n${selectedSentence.example_ja || sentenceJa}${suffix}`)) return;
     setSentenceBusy(true);
-    setError("");
+    setLibraryError("");
     try {
       await deleteSentence(selectedSentence.id);
       setSelectedSentenceId(null);
@@ -692,7 +715,7 @@ export default function App() {
       setSentenceTotal(sentenceList.total || 0);
       setSpace(spaceRes);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setSentenceBusy(false);
     }
@@ -702,15 +725,15 @@ export default function App() {
     const lemma = token.dictionary_form || token.surface;
     if (!lemma) return;
     setSentenceBusy(true);
-    setError("");
+    setLibraryError("");
     try {
       const result = await lookupDictionary(lemma);
       setSelectedTokenLookup(result);
       if (!result.meanings?.length) {
-        setError(`未查到「${lemma}」的释义。可能是词形未收录，或当前网络无法访问外部词典。`);
+        setLibraryError(`未查到「${lemma}」的释义。可能是词形未收录，或当前网络无法访问外部词典。`);
       }
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setLibraryError(String((err as Error).message || err));
     } finally {
       setSentenceBusy(false);
     }
@@ -721,13 +744,13 @@ export default function App() {
     const partner = (space?.partner?.username || "").trim();
     if (!partner) return;
     setSentenceBusy(true);
-    setError("");
+    setSpaceError("");
     try {
       await shareSentence(selectedSentence.id, partner, shareComment);
       setShareComment("");
       setSharingSentence(false);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setSpaceError(normalizeSpaceError(err));
     } finally {
       setSentenceBusy(false);
     }
@@ -735,12 +758,12 @@ export default function App() {
 
   async function onCollectShare(share: NonNullable<DramaSpace["unread_shares"]>[number]) {
     setPartnerBusy(true);
-    setError("");
+    setSpaceError("");
     try {
       await collectShareSentence(share);
       await loadAll(true);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setSpaceError(normalizeSpaceError(err));
     } finally {
       setPartnerBusy(false);
     }
@@ -750,13 +773,13 @@ export default function App() {
     const text = (replyDraftByShare[shareId] || "").trim();
     if (!text) return;
     setPartnerBusy(true);
-    setError("");
+    setSpaceError("");
     try {
       await replyShare(shareId, text);
       setReplyDraftByShare((current) => ({ ...current, [shareId]: "" }));
       await loadAll(true);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setSpaceError(normalizeSpaceError(err));
     } finally {
       setPartnerBusy(false);
     }
@@ -1150,16 +1173,16 @@ export default function App() {
 
   async function onSaveProfile() {
     if (isProfileLocked) {
-      setError("请先登录云同步账号后再编辑个人信息。");
+      setProfileError("请先登录云同步账号后再编辑个人信息。");
       return;
     }
     setLoading(true);
-    setError("");
+    setProfileError("");
     try {
       setProfile(await saveProfile(profile));
       setSpace(await fetchDramaSpace());
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -1167,17 +1190,17 @@ export default function App() {
 
   async function onSelectPresetAvatar(avatar: PresetAvatar) {
     if (isProfileLocked) {
-      setError("请先登录云同步账号后再编辑个人信息。");
+      setProfileError("请先登录云同步账号后再编辑个人信息。");
       return;
     }
     setAvatarSelectingId(avatar.id);
-    setError("");
+    setProfileError("");
     try {
       const dataUrl = await imageUrlToDataUrl(avatar.fullUrl);
       setProfile((current) => ({ ...current, avatar_data_url: dataUrl }));
       setSelectedPresetAvatarId(avatar.id);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setAvatarSelectingId("");
     }
@@ -1185,7 +1208,8 @@ export default function App() {
 
   async function onLoginSync() {
     setLoading(true);
-    setError("");
+    setSyncError("");
+    setProfileError("");
     try {
       setSyncConfig(await loginSync(loginForm.serverUrl, loginForm.username, loginForm.password));
       const [profileRes, spaceRes] = await Promise.all([fetchProfile(), fetchDramaSpace()]);
@@ -1193,7 +1217,7 @@ export default function App() {
       setShowLoginModal(false);
       setSpace(spaceRes);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setSyncError(normalizeSyncAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -1201,15 +1225,16 @@ export default function App() {
 
   async function onRegisterSync() {
     setLoading(true);
-    setError("");
+    setSyncError("");
+    setProfileError("");
     try {
-      setSyncConfig(await registerSync(loginForm.serverUrl, loginForm.username, loginForm.password));
+      setSyncConfig(await registerSync(loginForm.serverUrl, loginForm.username, loginForm.password, loginForm.inviteCode));
       const [profileRes, spaceRes] = await Promise.all([fetchProfile(), fetchDramaSpace()]);
       setProfile(profileRes);
       setShowRegisterModal(false);
       setSpace(spaceRes);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setSyncError(normalizeSyncAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -1217,13 +1242,13 @@ export default function App() {
 
   async function onLogoutSync() {
     setLoading(true);
-    setError("");
+    setProfileError("");
     try {
       setSyncConfig(await logoutSync());
       setProfile(await fetchProfile());
       setSpace(await fetchDramaSpace());
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -1231,11 +1256,11 @@ export default function App() {
 
   async function onUpdateAutoSyncInterval(intervalMinutes: number) {
     setLoading(true);
-    setError("");
+    setProfileError("");
     try {
       setSyncConfig(await updateSyncConfig({ auto_sync_interval_minutes: intervalMinutes }));
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -1243,7 +1268,7 @@ export default function App() {
 
   async function onToggleLaunchAtLogin(enabled: boolean) {
     setDesktopSettingBusy(true);
-    setError("");
+    setDesktopSettingsError("");
     try {
       if (window.wordbookDesktop?.setLaunchAtLogin) {
         const next = await window.wordbookDesktop.setLaunchAtLogin(enabled);
@@ -1252,7 +1277,7 @@ export default function App() {
         setLaunchAtLogin(enabled);
       }
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setDesktopSettingsError(String((err as Error).message || err));
     } finally {
       setDesktopSettingBusy(false);
     }
@@ -1260,12 +1285,12 @@ export default function App() {
 
   async function onUpdateNotificationWindow(partial: Partial<DesktopSettings>) {
     setDesktopSettingBusy(true);
-    setError("");
+    setDesktopSettingsError("");
     try {
       const saved = await updateDesktopSettings(partial);
       setDesktopSettings(saved);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setDesktopSettingsError(String((err as Error).message || err));
     } finally {
       setDesktopSettingBusy(false);
     }
@@ -1275,13 +1300,13 @@ export default function App() {
     const target = partnerRequestName.trim();
     if (!target || !space?.can_send_partner_request) return;
     setPartnerBusy(true);
-    setError("");
+    setSpaceError("");
     try {
       await createPartnerRequest(target);
       setPartnerRequestName("");
       setSpace(await fetchDramaSpace());
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setSpaceError(normalizeSpaceError(err));
     } finally {
       setPartnerBusy(false);
     }
@@ -1289,12 +1314,12 @@ export default function App() {
 
   async function onAcceptPartnerRequest(requestId: number) {
     setPartnerBusy(true);
-    setError("");
+    setSpaceError("");
     try {
       await acceptPartnerRequest(requestId);
       setSpace(await fetchDramaSpace());
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setSpaceError(normalizeSpaceError(err));
     } finally {
       setPartnerBusy(false);
     }
@@ -1302,13 +1327,13 @@ export default function App() {
 
   async function onRunSync() {
     setLoading(true);
-    setError("");
+    setProfileError("");
     try {
       const result = await runSync();
       if (result.state === "needs_pull") {
         const conflictCount = Number((result.conflicts || []).length || 0);
         const hint = conflictCount > 0 ? `，其中 ${conflictCount} 条需要你选择处理方式` : "";
-        setError((result.message || "云端有新变化，请先下载云端更新") + hint);
+        setProfileError((result.message || "云端有新变化，请先下载云端更新") + hint);
         const conflictsRes = await fetchSyncConflicts().catch(() => ({ items: [] as SyncConflict[] }));
         setSyncConflicts(conflictsRes.items || []);
         return;
@@ -1317,7 +1342,7 @@ export default function App() {
       setSyncConflicts([]);
       setSpace(await fetchDramaSpace());
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -1325,12 +1350,12 @@ export default function App() {
 
   async function onPullSync() {
     setLoading(true);
-    setError("");
+    setProfileError("");
     try {
       const result = await pullSync();
       if (result.state === "conflict") {
         const conflictCount = Number((result.conflicts || []).length || 0);
-        setError((result.message || "发现内容冲突，请先选择处理方式") + (conflictCount ? `（${conflictCount} 条）` : ""));
+        setProfileError((result.message || "发现内容冲突，请先选择处理方式") + (conflictCount ? `（${conflictCount} 条）` : ""));
         const conflictsRes = await fetchSyncConflicts().catch(() => ({ items: [] as SyncConflict[] }));
         setSyncConflicts(conflictsRes.items || []);
         return;
@@ -1339,7 +1364,7 @@ export default function App() {
       setSyncConflicts([]);
       setSpace(await fetchDramaSpace());
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setLoading(false);
     }
@@ -1362,12 +1387,12 @@ export default function App() {
     if (!conflict.type || !conflict.uuid) return;
     const key = `${conflict.type}:${conflict.uuid}:${strategy}`;
     setResolvingConflictKey(key);
-    setError("");
+    setProfileError("");
     try {
       const next = await resolveSyncConflict(conflict.type, conflict.uuid, strategy);
       setSyncConflicts(next.items || []);
     } catch (err) {
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setResolvingConflictKey("");
     }
@@ -1377,7 +1402,7 @@ export default function App() {
     const pending = syncConflicts.filter((item) => !item.resolved_strategy);
     if (!pending.length) return;
     setResolvingConflictKey(`all:${strategy}`);
-    setError("");
+    setProfileError("");
     try {
       let latest = { items: syncConflicts };
       for (const item of pending) {
@@ -1385,7 +1410,7 @@ export default function App() {
       }
       setSyncConflicts(latest.items || []);
     } catch (err) { 
-      setError(String((err as Error).message || err));
+      setProfileError(String((err as Error).message || err));
     } finally {
       setResolvingConflictKey("");
     }
@@ -1583,6 +1608,12 @@ export default function App() {
             ) : null}
           </section>
         </section>
+        {spaceError ? (
+          <div className="connection-card">
+            <strong>操作未完成</strong>
+            <span>{spaceError}</span>
+          </div>
+        ) : null}
         {unreadShares.length ? (
           <section className="unread-share-panel">
             <div className="section-title">
@@ -1750,10 +1781,16 @@ export default function App() {
             <Cloud size={17} />
             <span>登录与同步</span>
           </div>
-          {error ? (
+          {syncError ? (
             <div className="connection-card">
               <strong>操作未完成</strong>
-              <span>{error}</span>
+              <span>{syncError}</span>
+            </div>
+          ) : null}
+          {profileError ? (
+            <div className="connection-card">
+              <strong>操作未完成</strong>
+              <span>{profileError}</span>
             </div>
           ) : null}
           <div className="sync-state">
@@ -1778,42 +1815,6 @@ export default function App() {
               <option value="60">每 1 小时</option>
             </select>
           </label>
-          <div className="desktop-settings-panel">
-            <div className="field-title"><Settings size={15} />桌面提醒</div>
-            <label className="setting-toggle">
-              <span>开机启动</span>
-              <input
-                type="checkbox"
-                checked={launchAtLogin}
-                onChange={(event) => onToggleLaunchAtLogin(event.target.checked)}
-                disabled={desktopSettingBusy}
-              />
-            </label>
-            <label>
-              <span>接收系统消息时间</span>
-              <div className="time-window-row">
-                <select
-                  value={desktopSettings.notification_window_start}
-                  onChange={(event) => onUpdateNotificationWindow({ notification_window_start: event.target.value })}
-                  disabled={desktopSettingBusy}
-                >
-                  {START_HOUR_OPTIONS.map((item) => (
-                    <option key={item} value={item}>{item}</option>
-                  ))}
-                </select>
-                <small>至</small>
-                <select
-                  value={desktopSettings.notification_window_end}
-                  onChange={(event) => onUpdateNotificationWindow({ notification_window_end: event.target.value })}
-                  disabled={desktopSettingBusy}
-                >
-                  {END_HOUR_OPTIONS.map((item) => (
-                    <option key={item} value={item}>{item}</option>
-                  ))}
-                </select>
-              </div>
-            </label>
-          </div>
           {syncConflicts.length ? (
             <div className="sync-conflict-panel">
               <strong>需要你确认的内容（{syncConflicts.length}）</strong>
@@ -1894,6 +1895,54 @@ export default function App() {
             </button>
           </div>
         </section>
+
+        <section className="profile-card">
+          <div className="section-title">
+            <Settings size={17} />
+            <span>桌面提醒</span>
+          </div>
+          {desktopSettingsError ? (
+            <div className="connection-card desktop-settings-error">
+              <strong>设置保存失败</strong>
+              <span>{desktopSettingsError}</span>
+            </div>
+          ) : null}
+          <div className="desktop-settings-panel">
+            <label className="setting-toggle">
+              <span>开机启动</span>
+              <input
+                type="checkbox"
+                checked={launchAtLogin}
+                onChange={(event) => onToggleLaunchAtLogin(event.target.checked)}
+                disabled={desktopSettingBusy}
+              />
+            </label>
+            <label>
+              <span>接收系统消息时间</span>
+              <div className="time-window-row">
+                <select
+                  value={desktopSettings.notification_window_start}
+                  onChange={(event) => onUpdateNotificationWindow({ notification_window_start: event.target.value })}
+                  disabled={desktopSettingBusy}
+                >
+                  {START_HOUR_OPTIONS.map((item) => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+                <small>至</small>
+                <select
+                  value={desktopSettings.notification_window_end}
+                  onChange={(event) => onUpdateNotificationWindow({ notification_window_end: event.target.value })}
+                  disabled={desktopSettingBusy}
+                >
+                  {END_HOUR_OPTIONS.map((item) => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+              </div>
+            </label>
+          </div>
+        </section>
         {showLoginModal ? (
           <div className="modal-backdrop" role="dialog" aria-modal="true">
             <div className="sentence-edit-modal">
@@ -1953,6 +2002,10 @@ export default function App() {
                 <label>
                   <span>密码（至少 8 位）</span>
                   <input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
+                </label>
+                <label>
+                  <span>邀请码</span>
+                  <input value={loginForm.inviteCode} onChange={(event) => setLoginForm({ ...loginForm, inviteCode: event.target.value })} />
                 </label>
                 <div className="sentence-actions">
                   <button className="runtime-action compact" onClick={onRegisterSync} disabled={loading}>
@@ -2047,12 +2100,10 @@ export default function App() {
             />
           </label>
 
-          {error ? (
+          {libraryError ? (
             <div className="connection-card">
-              <strong>{sidecarStatus?.state === "starting" ? "本地服务正在启动" : "连接不到本地服务"}</strong>
-              <span>
-                {sidecarStatus?.message || `桌面端会自动启动并守护 ${SIDECAR_BASE}，也可以点击右上角重试。`}
-              </span>
+              <strong>{sidecarStatus?.state === "starting" ? "本地服务正在启动" : "操作未完成"}</strong>
+              <span>{libraryError}</span>
             </div>
           ) : null}
 

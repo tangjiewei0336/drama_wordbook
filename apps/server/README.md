@@ -1,6 +1,6 @@
 # Drama Wordbook Server
 
-公网同步服务。建议部署在反向代理后面，只暴露 HTTPS：
+公网同步服务。建议部署在反向代理后面：
 
 ```bash
 cd apps/server
@@ -16,7 +16,33 @@ uvicorn app.main:app --host 127.0.0.1 --port 18321
 export DATABASE_URL="postgresql+psycopg://drama_user:your-password@127.0.0.1:5432/drama_wordbook"
 ```
 
-生产环境请使用 Caddy/Nginx/Traefik 终止 TLS，并把外部地址配置成 `https://your-domain`。桌面端对公网同步地址会拒绝明文 HTTP，只允许 `https://`，本机调试可用 `http://127.0.0.1` 或 `http://localhost`。
+生产环境可使用 Caddy/Nginx/Traefik 转发。当前客户端支持 `http://` 与 `https://`，例如可直接使用 `http://146.56.195.192`。
+
+### Nginx 纯 HTTP（无 TLS）示例
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name 146.56.195.192;
+
+    location / {
+        proxy_pass http://127.0.0.1:18321;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+部署后执行：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
 ## 调试管理界面
 
@@ -37,4 +63,6 @@ http://127.0.0.1:18321/admin?token=your-admin-token
 说明：
 - 密码是哈希存储，管理页不会显示明文密码（数据库里也没有明文）。
 - 重置密码入口位于管理页顶部。
+- 注册接口要求邀请码（每个邀请码仅可使用一次），可用管理接口生成：
+  - `POST /admin/invite-codes?token=your-admin-token`，请求体可传 `{ "code": "CUSTOMCODE" }`，不传则自动生成。
 - 请勿在公网暴露该调试入口，建议只在内网或本机使用。
