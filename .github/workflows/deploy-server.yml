@@ -1,0 +1,96 @@
+name: Deploy Server
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/server/**"
+      - ".github/workflows/deploy-server.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-server-production
+  cancel-in-progress: true
+
+jobs:
+  test-server:
+    name: Test server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install server dependencies
+        working-directory: apps/server
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run server tests
+        working-directory: apps/server
+        run: python -m unittest tests/test_sync_versioning.py
+
+  deploy-server:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs:
+      - test-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Upload server files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          source: "apps/server/app/**,apps/server/pyproject.toml,apps/server/README.md"
+          target: "/opt/drama_wordbook"
+
+      - name: Restart server service
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script: |
+            set -euo pipefail
+
+            if ! systemctl cat drama-server >/dev/null 2>&1; then
+              echo "drama-server.service not found. Please create systemd service first."
+              exit 1
+            fi
+
+            cd /opt/drama_wordbook/apps/server
+            if [ ! -d ".venv" ]; then
+              python3 -m venv .venv
+            fi
+            . .venv/bin/activate
+            python -m pip install --upgrade pip
+            python -m pip install -e .
+
+            sudo systemctl restart drama-server
+
+            for i in $(seq 1 15); do
+              if curl -fsS "http://127.0.0.1:18321/health" >/dev/null 2>&1; then
+                echo "health check passed"
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo "health check failed"
+            sudo systemctl status drama-server --no-pager
+            exit 1

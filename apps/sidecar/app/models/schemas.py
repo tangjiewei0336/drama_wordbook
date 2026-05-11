@@ -59,6 +59,7 @@ class JaToken(BaseModel):
     surface: str
     dictionary_form: str
     reading: str = ""
+    accent: int | None = None
     pos: str = ""
     jlpt_level: str = ""
     meanings: list[str] = Field(default_factory=list)
@@ -83,14 +84,16 @@ class VocabPlayback(BaseModel):
 
 
 class VocabAddItem(BaseModel):
-    surface: str
-    dictionary_form: str
+    surface: str = ""
+    dictionary_form: str = ""
     reading: str = ""
     jlpt_level: str = ""
     source: str = "manual"
     meanings: list[str] = Field(default_factory=list)
+    skip_enrichment: bool = False
     example_ja: str = ""
     example_zh: str = ""
+    tags: list[str] = Field(default_factory=list)
     screenshot_base64: str | None = None
     playback: VocabPlayback | None = None
 
@@ -114,10 +117,12 @@ class VocabHead(BaseModel):
 
 class VocabItem(BaseModel):
     id: int
+    uuid: str = ""
     head_id: int
     surface: str
     dictionary_form: str = ""
     reading: str
+    accent: int | None = None
     jlpt_level: str = ""
     source: str = "manual"
     meanings: list[str]
@@ -125,6 +130,8 @@ class VocabItem(BaseModel):
     example_zh: str
     screenshot_path: str | None
     playback: dict | None
+    sentence_id: int | None = None
+    tags: list[str] = Field(default_factory=list)
     created_at: str
 
 
@@ -143,6 +150,88 @@ class VocabByTimeResponse(BaseModel):
 class VocabUpdateItemRequest(BaseModel):
     example_ja: str = ""
     example_zh: str = ""
+    tags: list[str] | None = None
+
+
+class SentenceAddRequest(BaseModel):
+    example_ja: str = ""
+    example_zh: str = ""
+    tags: list[str] = Field(default_factory=list)
+    source: str = "manual"
+    screenshot_base64: str | None = None
+    playback: VocabPlayback | None = None
+
+
+class SentenceUpdateRequest(BaseModel):
+    example_ja: str = ""
+    example_zh: str = ""
+    tags: list[str] | None = None
+
+
+class SentenceRecord(BaseModel):
+    id: int
+    uuid: str = ""
+    example_ja: str
+    example_zh: str = ""
+    tags: list[str] = Field(default_factory=list)
+    source: str = "manual"
+    screenshot_path: str | None = None
+    playback: dict | None = None
+    word_count: int = 0
+    created_at: str
+    updated_at: str
+
+
+class SentenceListResponse(BaseModel):
+    items: list[SentenceRecord]
+    total: int
+    limit: int
+    offset: int
+
+
+class Profile(BaseModel):
+    nickname: str = "Drama Learner"
+    avatar_data_url: str = ""
+    theme_color: str = "#2e8f76"
+
+
+class SyncConfig(BaseModel):
+    server_url: str = ""
+    access_token: str = ""
+    username: str = ""
+    last_sync_at: str = ""
+    last_server_version: int = 0
+    auto_sync_interval_minutes: int = 0
+
+
+class SyncConfigUpdateRequest(BaseModel):
+    auto_sync_interval_minutes: int = 0
+
+
+class SyncLoginRequest(BaseModel):
+    server_url: str
+    username: str
+    password: str
+
+
+class SyncRunRequest(BaseModel):
+    direction: str = "push_pull"
+
+
+class ShareSentenceRequest(BaseModel):
+    recipient_username: str = ""
+    sentence_id: int
+    comment: str = ""
+
+
+class PartnerRequestPayload(BaseModel):
+    partner_username: str = ""
+
+
+class SyncConflictResolveRequest(BaseModel):
+    type: str
+    uuid: str
+    strategy: str
 
 
 class DictLookupRequest(BaseModel):
@@ -153,6 +242,7 @@ class DictLookupResponse(BaseModel):
     lemma: str
     reading: str = ""
     meanings: list[str] = Field(default_factory=list)
+    jlpt_level: str = ""
 
 
 class AsrTranscribeRequest(BaseModel):

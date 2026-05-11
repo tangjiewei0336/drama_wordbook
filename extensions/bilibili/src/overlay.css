@@ -176,17 +176,6 @@ video .wb-overlay-root,
   font-weight: 800;
 }
 
-.wb-overlay-token-pos {
-  flex: 0 0 auto;
-  color: #24745f;
-  background: rgba(232, 247, 241, 0.8);
-  border-radius: 999px;
-  padding: 1px 6px;
-  font-size: 10px;
-  line-height: 14px;
-  font-weight: 900;
-}
-
 .wb-overlay-token-delete {
   display: none;
   flex: 0 0 auto;
@@ -255,11 +244,6 @@ video .wb-overlay-root,
   color: rgba(255, 255, 255, 0.72);
 }
 
-.wb-overlay-token-bubble.active .wb-overlay-token-pos {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.18);
-}
-
 .wb-overlay-meaning-input {
   border: 1px solid #dfe5eb;
   border-radius: 8px;
@@ -284,6 +268,34 @@ video .wb-overlay-root,
   color: #64748b;
 }
 
+.wb-overlay-tag-list,
+.wb-overlay-tag-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.wb-overlay-tag-add-row {
+  flex-wrap: nowrap;
+}
+
+.wb-overlay-tag-chip {
+  border: 1px solid #dfe5eb;
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: #344054;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.wb-overlay-tag-chip.active {
+  color: #fff;
+  background: #2e8f76;
+  border-color: #2e8f76;
+}
+
 .wb-overlay-actions {
   display: flex;
   gap: 8px;
@@ -297,6 +309,11 @@ video .wb-overlay-root,
   cursor: pointer;
   font-size: 13px;
   font-weight: 800;
+}
+
+.wb-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .wb-btn-primary {

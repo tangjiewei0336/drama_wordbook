@@ -119,25 +119,25 @@ function installResizeHandles(card) {
   });
 }
 
-function getDefaultMeaning(token) {
-  return token?.dictionary_form || token?.surface || "";
-}
-
-function pickJlptLevel(tokens, indices) {
-  return Array.from(indices)
-    .sort((a, b) => a - b)
-    .map((idx) => safeText(tokens[idx]?.jlpt_level))
+async function lookupMeaning(candidates) {
+  const seen = new Set();
+  const keys = (Array.isArray(candidates) ? candidates : [candidates])
+    .map((value) => safeText(value).trim())
     .filter(Boolean)
-    .sort((a, b) => Number(b.slice(1)) - Number(a.slice(1)))[0] || "";
-}
+    .filter((value) => {
+      if (seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
 
-async function lookupMeaning(lemma) {
-  const res = await chrome.runtime.sendMessage({
-    type: "POC_DICT_LOOKUP",
-    lemma
-  });
-  if (!res?.ok) return null;
-  return res.result || null;
+  for (const lemma of keys) {
+    const res = await chrome.runtime.sendMessage({
+      type: "POC_DICT_LOOKUP",
+      lemma
+    });
+    if (res?.ok && res.result?.meanings?.length) return res.result;
+  }
+  return null;
 }
 
 async function renderOverlay(payload) {
@@ -174,6 +174,49 @@ async function renderOverlay(payload) {
   zhTextarea.value = safeText(payload?.ocr?.zh_lines?.join(" "));
   zhSection.appendChild(zhTextarea);
 
+  const tagSection = createEl("div", "wb-overlay-section");
+  tagSection.appendChild(createEl("div", "wb-overlay-label", "句子 tag"));
+  const tagChoices = ["kksk", "好搞笑", "高频词", "神台词", "听力"];
+  const selectedTags = new Set();
+  const tagList = createEl("div", "wb-overlay-tag-list");
+  const tagAddRow = createEl("div", "wb-overlay-tag-add-row");
+  const tagInput = createEl("input", "wb-overlay-meaning-input");
+  tagInput.placeholder = "添加自定义 tag";
+  const tagAddBtn = createEl("button", "wb-btn wb-btn-default", "添加");
+  const getTags = () => Array.from(selectedTags);
+  const renderTagButtons = () => {
+    tagList.innerHTML = "";
+    tagChoices.forEach((tag) => {
+      const btn = createEl("button", `wb-overlay-tag-chip${selectedTags.has(tag) ? " active" : ""}`, tag);
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        if (selectedTags.has(tag)) selectedTags.delete(tag);
+        else selectedTags.add(tag);
+        renderTagButtons();
+      });
+      tagList.appendChild(btn);
+    });
+  };
+  tagAddBtn.addEventListener("click", () => {
+    const value = safeText(tagInput.value).trim();
+    if (!value) return;
+    if (!tagChoices.includes(value)) tagChoices.push(value);
+    selectedTags.add(value);
+    tagInput.value = "";
+    renderTagButtons();
+  });
+  tagInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      tagAddBtn.click();
+    }
+  });
+  renderTagButtons();
+  tagAddRow.appendChild(tagInput);
+  tagAddRow.appendChild(tagAddBtn);
+  tagSection.appendChild(tagList);
+  tagSection.appendChild(tagAddRow);
+
   const tokenSection = createEl("div", "wb-overlay-section");
   tokenSection.appendChild(createEl("div", "wb-overlay-label", "选择字符/词片段（可多选，自动拼接）"));
   const tokenList = createEl("div", "wb-overlay-token-list");
@@ -191,14 +234,14 @@ async function renderOverlay(payload) {
     const dictPreview = createEl("div", "wb-overlay-dict-preview");
     dictPreview.innerHTML = '<span class="muted">词典提示将显示在这里</span>';
     let lookupSeq = 0;
+    let lookupReading = "";
+    let lookupDict = null;
 
     composedWordInput.addEventListener("input", () => {
       composedEdited = true;
       refreshDictionaryPreview().catch(() => {});
     });
 
-    const meaningInput = createEl("input", "wb-overlay-meaning-input");
-    meaningInput.placeholder = "释义（可选，用 ; 分隔多条）";
     const readingHint = createEl("div", "wb-overlay-label", "");
 
     const getComposedTokenText = () =>
@@ -220,36 +263,45 @@ async function renderOverlay(payload) {
         .filter(Boolean)
         .join("");
 
-    const getComposedJlptLevel = () => pickJlptLevel(tokens, selectedIndices);
+    const getComposedJlptLevel = () =>
+      Array.from(selectedIndices)
+        .sort((a, b) => a - b)
+        .map((idx) => safeText(tokens[idx]?.jlpt_level))
+        .filter(Boolean)
+        .sort((a, b) => Number(b.slice(1)) - Number(a.slice(1)))[0] || "";
 
     const refreshDictionaryPreview = async () => {
-      const lookupKey = composedWordInput.value.trim() || getComposedTokenText();
-      if (!lookupKey) {
+      const typedWord = composedWordInput.value.trim();
+      const surfaceText = getComposedTokenText();
+      const dictionaryForm = getComposedDictionaryForm();
+      const lookupCandidates = (composedEdited && typedWord)
+        ? [typedWord, surfaceText, dictionaryForm]
+        : [surfaceText, dictionaryForm, typedWord];
+      if (!lookupCandidates.some((value) => safeText(value).trim())) {
+        lookupReading = "";
+        lookupDict = null;
+        readingHint.textContent = "";
         dictPreview.innerHTML = '<span class="muted">词典提示将显示在这里</span>';
         return;
       }
 
       const seq = ++lookupSeq;
       dictPreview.innerHTML = '<span class="muted">词典查询中...</span>';
-      const dict = await lookupMeaning(lookupKey);
+      const dict = await lookupMeaning(lookupCandidates);
       if (seq !== lookupSeq) return;
 
       if (dict?.meanings?.length) {
-        meaningInput.value = dict.meanings.join("；");
-        const jlptLevel = getComposedJlptLevel();
-        readingHint.textContent = [dict?.reading ? `读音: ${dict.reading}` : "", jlptLevel ? `JLPT: ${jlptLevel}` : ""]
-          .filter(Boolean)
-          .join(" · ");
+        lookupDict = dict;
+        lookupReading = safeText(dict?.reading);
+        readingHint.textContent = safeText(dict?.jlpt_level) || getComposedJlptLevel();
         dictPreview.innerHTML = `
           <div><strong>释义</strong>：${dict.meanings.join("；")}</div>
-          <div class="muted">${[dict?.reading ? `读音：${dict.reading}` : "无读音信息", jlptLevel ? `JLPT：${jlptLevel}` : ""]
-            .filter(Boolean)
-            .join(" · ")}</div>
         `;
       } else {
-        const jlptLevel = getComposedJlptLevel();
-        readingHint.textContent = jlptLevel ? `JLPT: ${jlptLevel}` : "";
-        dictPreview.innerHTML = '<span class="muted">未命中词典，请手动填写释义</span>';
+        lookupReading = "";
+        lookupDict = null;
+        readingHint.textContent = getComposedJlptLevel();
+        dictPreview.innerHTML = '<span class="muted">未命中词典，可手动调整词形</span>';
       }
     };
 
@@ -279,44 +331,16 @@ async function renderOverlay(payload) {
         bubble.type = "button";
         const level = safeText(token.jlpt_level);
         const dictionaryForm = safeText(token.dictionary_form || token.surface);
-        const reading = safeText(token.reading);
-        const pos = safeText(token.pos);
         const surfaceText = safeText(token.surface);
-        const meaningText = Array.isArray(token.meanings) && token.meanings.length ? safeText(token.meanings[0]) : "";
-        bubble.title = [surfaceText, reading, pos, dictionaryForm !== surfaceText ? dictionaryForm : "", meaningText, level].filter(Boolean).join(" · ");
+        bubble.title = [surfaceText, dictionaryForm !== surfaceText ? dictionaryForm : "", level].filter(Boolean).join(" · ");
         const tokenMain = createEl("span", "wb-overlay-token-main");
         const tokenMainText = createEl("span", "wb-overlay-token-main-text");
         tokenMainText.appendChild(createEl("span", "wb-overlay-token-surface", surfaceText));
-        if (reading) tokenMainText.appendChild(createEl("span", "wb-overlay-token-reading", reading));
         tokenMain.appendChild(tokenMainText);
-        if (pos) tokenMain.appendChild(createEl("span", "wb-overlay-token-pos", pos));
-        const deleteBtn = createEl("span", "wb-overlay-token-delete");
-        deleteBtn.title = "删除误识别";
-        deleteBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 7h2v8h-2v-8Zm4 0h2v8h-2v-8ZM7 8h10l-1 13H8L7 8Z"/></svg>';
-        deleteBtn.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          tokens.splice(index, 1);
-          const nextSelected = new Set();
-          selectedIndices.forEach((idx) => {
-            if (idx < index) nextSelected.add(idx);
-            if (idx > index) nextSelected.add(idx - 1);
-          });
-          selectedIndices.clear();
-          nextSelected.forEach((idx) => selectedIndices.add(idx));
-          if (!selectedIndices.size && tokens.length) selectedIndices.add(Math.min(index, tokens.length - 1));
-          renderTokenBubbles();
-          refreshBubbleState().catch(() => {});
-        });
-        tokenMain.appendChild(deleteBtn);
         bubble.appendChild(tokenMain);
         if (dictionaryForm && dictionaryForm !== surfaceText) {
           const tokenMeta = createEl("span", "wb-overlay-token-meta");
-          tokenMeta.textContent = [dictionaryForm, meaningText].filter(Boolean).join(" · ");
-          bubble.appendChild(tokenMeta);
-        } else if (meaningText) {
-          const tokenMeta = createEl("span", "wb-overlay-token-meta");
-          tokenMeta.textContent = meaningText;
+          tokenMeta.textContent = dictionaryForm;
           bubble.appendChild(tokenMeta);
         }
         if (level) bubble.appendChild(createEl("small", "wb-overlay-token-level", level));
@@ -337,7 +361,6 @@ async function renderOverlay(payload) {
     tokenSection.appendChild(tokenList);
     tokenSection.appendChild(composedWordInput);
     tokenSection.appendChild(dictPreview);
-    tokenSection.appendChild(meaningInput);
     tokenSection.appendChild(readingHint);
 
     addBtnHandler = async () => {
@@ -348,12 +371,10 @@ async function renderOverlay(payload) {
       }
       const composedSurface = safeText(composedWordInput.value).trim() || getComposedTokenText();
       const composedDictionaryForm = getComposedDictionaryForm() || composedSurface;
-      const composedReading = readingHint.textContent.split("·")[0].replace(/^读音:\s*/, "").trim() || getComposedReading();
-      const composedJlptLevel = getComposedJlptLevel();
-      const meanings = safeText(meaningInput.value)
-        .split(";")
-        .map((x) => x.trim())
-        .filter(Boolean);
+      const composedReading = lookupReading || getComposedReading();
+      const composedJlptLevel = safeText(lookupDict?.jlpt_level) || getComposedJlptLevel();
+      const composedMeanings = Array.isArray(lookupDict?.meanings) ? lookupDict.meanings : [];
+      const tags = getTags();
       const words = [
         {
           surface: composedSurface,
@@ -361,9 +382,11 @@ async function renderOverlay(payload) {
           reading: composedReading,
           jlpt_level: composedJlptLevel,
           source: "manual",
-          meanings: meanings.length ? meanings : [composedDictionaryForm || composedSurface],
+          meanings: composedMeanings,
+          skip_enrichment: true,
           example_ja: safeText(jaTextarea.value),
           example_zh: safeText(zhTextarea.value),
+          tags,
           screenshot_base64: safeText(payload?.screenshot_base64) || null,
           playback: payload?.playback || null
         }
@@ -391,24 +414,30 @@ async function renderOverlay(payload) {
 
   const actions = createEl("div", "wb-overlay-actions");
   const addBtn = createEl("button", "wb-btn wb-btn-primary", "添加到词典");
+  const sentenceBtn = createEl("button", "wb-btn wb-btn-default", "只保存句子");
   const closeBtn = createEl("button", "wb-btn wb-btn-default", "取消本次");
   const resumeBtn = createEl("button", "wb-btn wb-btn-default", "恢复播放");
   actions.appendChild(addBtn);
+  actions.appendChild(sentenceBtn);
   actions.appendChild(closeBtn);
   actions.appendChild(resumeBtn);
+  if (!tokens.length) {
+    addBtn.disabled = true;
+    addBtn.title = "未识别到可添加词条";
+  }
 
   const status = createEl("div", "wb-overlay-status");
   let saved = false;
   if (!tokens.length) {
     addBtnHandler = async () => {
-      await chrome.runtime.sendMessage({ type: "POC_RELEASE_CAPTURE_LOCK" });
-      status.textContent = "未识别到可添加词条，已解除锁定，可重试";
+      status.textContent = "未识别到可添加词条";
     };
   }
 
   resumeBtn.addEventListener("click", async () => {
     const res = await chrome.runtime.sendMessage({ type: "POC_RESUME_PLAYBACK" });
     status.textContent = res?.ok ? "已恢复播放" : `恢复失败: ${safeText(res?.error)}`;
+    if (res?.ok) removeOverlay();
   });
 
   addBtn.addEventListener("click", async () => {
@@ -416,6 +445,23 @@ async function renderOverlay(payload) {
     if (status.textContent.includes("已保存")) {
       saved = true;
     }
+  });
+
+  sentenceBtn.addEventListener("click", async () => {
+    status.textContent = "保存句子中...";
+    const tags = getTags();
+    const res = await chrome.runtime.sendMessage({
+      type: "POC_ADD_SENTENCE_ONLY",
+      sentence: {
+        example_ja: safeText(jaTextarea.value),
+        example_zh: safeText(zhTextarea.value),
+        tags,
+        screenshot_base64: safeText(payload?.screenshot_base64) || null,
+        playback: payload?.playback || null
+      }
+    });
+    status.textContent = res?.ok ? "句子已保存" : `保存失败: ${safeText(res?.error)}`;
+    if (res?.ok) saved = true;
   });
 
   if (payload?.loading) {
@@ -452,6 +498,7 @@ async function renderOverlay(payload) {
   card.appendChild(meta);
   card.appendChild(jaSection);
   card.appendChild(zhSection);
+  card.appendChild(tagSection);
   card.appendChild(tokenSection);
   card.appendChild(actions);
   card.appendChild(status);

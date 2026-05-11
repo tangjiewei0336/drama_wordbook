@@ -7,9 +7,9 @@
   "type": "module",
   "main": "src-electron/main.cjs",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:4173 && cross-env DRAMA_WORDBOOK_DESKTOP_DEV=1 VITE_DEV_SERVER_URL=http://127.0.0.1:4173 electron .\"",
-    "dev:web": "vite --host 127.0.0.1",
-    "start": "electron .",
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 4173 --strictPort\" \"wait-on tcp:4173 && cross-env ELECTRON_RUN_AS_NODE= DRAMA_WORDBOOK_DESKTOP_DEV=1 VITE_DEV_SERVER_URL=http://127.0.0.1:4173 electron .\"",
+    "dev:web": "vite --host 127.0.0.1 --port 4173 --strictPort",
+    "start": "cross-env ELECTRON_RUN_AS_NODE= electron .",
     "build": "vite build",
     "preview": "vite preview",
     "pack": "npm run build && electron-builder --dir",
