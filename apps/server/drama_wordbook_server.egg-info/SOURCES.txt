@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/main.py
+drama_wordbook_server.egg-info/PKG-INFO
+drama_wordbook_server.egg-info/SOURCES.txt
+drama_wordbook_server.egg-info/dependency_links.txt
+drama_wordbook_server.egg-info/requires.txt
+drama_wordbook_server.egg-info/top_level.txt
+tests/test_sync_versioning.py

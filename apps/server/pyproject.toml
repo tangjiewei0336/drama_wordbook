@@ -14,3 +14,8 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# share_uploads/ is created at runtime for uploaded assets; setuptools must not
+# treat it as a second top-level Python package alongside app/.
+[tool.setuptools]
+packages = ["app"]
