@@ -296,6 +296,19 @@ async function postVocabAddItems(items) {
   return res.json();
 }
 
+async function postSentence(sentence) {
+  const res = await fetch(`${SIDECAR_BASE}/sentences`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(sentence)
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`sentences failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
 async function postVocabAddOne(item) {
   const res = await postVocabAddItems([item]);
   const id = Array.isArray(res?.created_item_ids) ? res.created_item_ids[0] : null;
@@ -886,6 +899,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         created_count: savedWords.length,
         skipped_count: Math.max(0, words.length - savedWords.length)
       });
+      return;
+    }
+
+    if (message.type === "POC_ADD_SENTENCE_ONLY") {
+      const sentence = message?.sentence || {};
+      const saved = await postSentence({ ...sentence, source: sentence.source || "manual" });
+      releaseCaptureLock();
+      await broadcastStatus("idle", "句子已保存");
+      sendResponse({ ok: true, sentence: saved });
       return;
     }
 

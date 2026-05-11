@@ -11,6 +11,8 @@ from urllib.request import Request, urlopen
 
 import certifi
 
+from app.services.jlpt_service import lookup_jlpt_entry
+
 
 SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 UA = {"User-Agent": "drama-wordbook-sidecar/0.1"}
@@ -95,7 +97,14 @@ def lookup_dictionary(lemma: str) -> dict:
     started = time.perf_counter()
     keyword = (lemma or "").strip()
     if not keyword:
-        return {"lemma": "", "reading": "", "meanings": []}
+        return {"lemma": "", "reading": "", "meanings": [], "jlpt_level": ""}
+
+    jlpt_entry = lookup_jlpt_entry(keyword)
+    jlpt_meaning = str(jlpt_entry.get("meaning") or "").strip()
+    jlpt_reading = str(jlpt_entry.get("reading") or "").strip()
+    jlpt_level = str(jlpt_entry.get("level") or "").strip()
+    if jlpt_meaning:
+        return {"lemma": keyword, "reading": jlpt_reading, "meanings": [jlpt_meaning], "jlpt_level": jlpt_level}
 
     ja_future = DICT_EXECUTOR.submit(_translate_ja_to_zh, keyword)
     jisho_future = DICT_EXECUTOR.submit(_lookup_jisho, keyword)
@@ -109,7 +118,10 @@ def lookup_dictionary(lemma: str) -> dict:
         reading, en_meanings = "", ()
     meanings_zh: list[str] = []
 
-    if ja_zh:
+    if jlpt_meaning:
+        meanings_zh.append(jlpt_meaning)
+
+    if ja_zh and ja_zh != keyword:
         meanings_zh.append(ja_zh)
 
     # Common copula normalization fallback for JP learners.
@@ -132,4 +144,4 @@ def lookup_dictionary(lemma: str) -> dict:
     if not dedup and en_meanings:
         dedup = en_meanings
 
-    return {"lemma": keyword, "reading": reading, "meanings": dedup[:5]}
+    return {"lemma": keyword, "reading": reading or jlpt_reading, "meanings": dedup[:5], "jlpt_level": jlpt_level}

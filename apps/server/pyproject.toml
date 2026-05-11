@@ -1,0 +1,14 @@
+[project]
+name = "drama-wordbook-server"
+version = "0.1.0"
+description = "Public sync server for Drama Wordbook"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

@@ -16,9 +16,11 @@ hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("fastapi")
 hiddenimports += collect_submodules("pydantic")
 hiddenimports += collect_submodules("sudachipy")
+hiddenimports += collect_submodules("pyopenjtalk")
 
 datas = []
 datas += collect_data_files("sudachidict_core")
+datas += collect_data_files("pyopenjtalk")
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]
 
 a = Analysis(

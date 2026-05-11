@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
+from app.services.accent_service import lookup_pitch_accent
 from app.services.jlpt_service import lookup_jlpt_entry
 
 try:
@@ -11,7 +12,7 @@ except Exception:  # pragma: no cover
     Dictionary = None
 
 
-WORD_RE = re.compile(r"[ぁ-んァ-ン一-龯ー]+")
+WORD_RE = re.compile(r"[ぁ-んァ-ン一-龯ー0-9０-９]+")
 CONTENT_POS = {"名詞", "動詞", "形容詞", "形状詞", "副詞", "連体詞"}
 SURU_FORMS = {
     "する",
@@ -246,6 +247,7 @@ def _normalize_analysis_token(token: dict) -> dict:
             "surface": "って",
             "dictionary_form": "って",
             "reading": "ッテ",
+            "accent": None,
             "pos": "助词",
             "jlpt_level": "",
             "meanings": [],
@@ -338,6 +340,7 @@ def _merge_verb_tail(tokens: list[dict], start: int) -> tuple[dict | None, int]:
             **current,
             "surface": "".join(surfaces),
             "reading": "".join(readings),
+            "accent": current.get("accent"),
             "pos": "动词",
         },
         consumed,
@@ -363,6 +366,7 @@ def merge_phrase_tokens(tokens: list[dict]) -> list[dict]:
                     "surface": "とこ",
                     "dictionary_form": "ところ",
                     "reading": "トコ",
+                    "accent": lookup_pitch_accent("ところ"),
                     "pos": "名词",
                     "jlpt_level": "",
                     "meanings": [],
@@ -381,6 +385,7 @@ def merge_phrase_tokens(tokens: list[dict]) -> list[dict]:
                     **current,
                     "surface": f"{current.get('surface', '')}{nxt.get('surface', '')}",
                     "reading": f"{current.get('reading', '')}{nxt.get('reading', '')}",
+                    "accent": current.get("accent"),
                     "pos": "动词",
                 }
             )
@@ -404,6 +409,7 @@ def merge_phrase_tokens(tokens: list[dict]) -> list[dict]:
                     "surface": "".join(surfaces),
                     "dictionary_form": dictionary_form,
                     "reading": reading,
+                    "accent": lookup_pitch_accent(dictionary_form),
                     "pos": "动词",
                     "jlpt_level": jlpt_entry.get("level", "") or current.get("jlpt_level", ""),
                     "meanings": meanings,
@@ -429,6 +435,7 @@ def tokenize_ja(text: str, include_stop: bool = False) -> list[dict]:
                 "surface": w,
                 "dictionary_form": dictionary_form,
                 "reading": "",
+                "accent": lookup_pitch_accent(dictionary_form),
                 "pos": "",
                 "jlpt_level": jlpt_entry.get("level", ""),
                 "meanings": _meanings_from_jlpt(jlpt_entry),
@@ -468,6 +475,7 @@ def tokenize_ja(text: str, include_stop: bool = False) -> list[dict]:
                 "surface": surface,
                 "dictionary_form": dictionary_form,
                 "reading": reading,
+                "accent": lookup_pitch_accent(dictionary_form),
                 "pos": _pos_label(pos),
                 "jlpt_level": jlpt_entry.get("level", ""),
                 "meanings": _meanings_from_jlpt(jlpt_entry),

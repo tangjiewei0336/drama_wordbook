@@ -53,6 +53,7 @@ def get_jlpt_index() -> dict[str, dict]:
             entry = {
                 "level": level,
                 "meaning": (row.get("meaning", "") or "").strip(),
+                "reading": _clean_reading(row.get("reading", "")),
             }
             for key in {_clean_key(row.get("expression", "")), _clean_reading(row.get("reading", ""))}:
                 if key:
