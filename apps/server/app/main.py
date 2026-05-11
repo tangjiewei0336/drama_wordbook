@@ -7,15 +7,25 @@ import json
 import os
 import secrets
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:  # pragma: no cover - optional in local sqlite mode
+    psycopg = None
+    dict_row = None
+
 DB_PATH = Path(__file__).resolve().parent.parent / "server.sqlite3"
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 ADMIN_TOKEN = os.getenv("DRAMA_ADMIN_TOKEN", "drama-debug")
 
 
@@ -23,73 +33,223 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def conn() -> sqlite3.Connection:
+def _database_backend() -> str:
+    lower = DATABASE_URL.lower()
+    if lower.startswith("postgres://") or lower.startswith("postgresql://") or lower.startswith("postgresql+psycopg://"):
+        return "postgres"
+    return "sqlite"
+
+
+def _normalized_database_url() -> str:
+    if DATABASE_URL.startswith("postgresql+psycopg://"):
+        return "postgresql://" + DATABASE_URL[len("postgresql+psycopg://") :]
+    if DATABASE_URL.startswith("postgres://"):
+        return "postgresql://" + DATABASE_URL[len("postgres://") :]
+    return DATABASE_URL
+
+
+def _sql_params(query: str, params: Iterable[Any], backend: str) -> tuple[str, Iterable[Any]]:
+    if backend != "postgres":
+        return query, params
+    return query.replace("?", "%s"), params
+
+
+class DBCursor:
+    def __init__(self, raw: Any):
+        self._raw = raw
+        self.lastrowid = getattr(raw, "lastrowid", None)
+
+    @property
+    def rowcount(self) -> int:
+        return int(getattr(self._raw, "rowcount", -1))
+
+    def fetchone(self):
+        return self._raw.fetchone()
+
+    def fetchall(self):
+        return self._raw.fetchall()
+
+
+class DBConnection:
+    def __init__(self, raw: Any, backend: str):
+        self.raw = raw
+        self.backend = backend
+
+    def __enter__(self) -> "DBConnection":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if exc_type is None:
+            self.raw.commit()
+        else:
+            self.raw.rollback()
+        self.raw.close()
+
+    def execute(self, query: str, params: Iterable[Any] = ()):
+        statement, normalized = _sql_params(query, params, self.backend)
+        return DBCursor(self.raw.execute(statement, tuple(normalized)))
+
+    def executescript(self, script: str) -> None:
+        if self.backend == "sqlite":
+            self.raw.executescript(script)
+            return
+        for statement in script.split(";"):
+            sql = statement.strip()
+            if sql:
+                self.raw.execute(sql)
+
+
+def conn() -> DBConnection:
+    backend = _database_backend()
+    if backend == "postgres":
+        if psycopg is None:
+            raise RuntimeError("DATABASE_URL points to PostgreSQL but psycopg is not installed")
+        db = psycopg.connect(_normalized_database_url(), row_factory=dict_row)
+        return DBConnection(db, "postgres")
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
-    return db
+    return DBConnection(db, "sqlite")
+
+
+def _insert_and_get_id(db: DBConnection, statement: str, params: Iterable[Any]) -> int:
+    if db.backend == "postgres":
+        row = db.execute(f"{statement.strip().rstrip(';')} RETURNING id", params).fetchone()
+        if not row:
+            raise RuntimeError("INSERT RETURNING id returned no row")
+        return int(row["id"])
+    cur = db.execute(statement, params)
+    return int(cur.lastrowid or 0)
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    if psycopg is not None:
+        unique_exc = getattr(psycopg.errors, "UniqueViolation", None)
+        if unique_exc is not None and isinstance(exc, unique_exc):
+            return True
+    return "unique" in str(exc).lower()
 
 
 def init_db() -> None:
     with conn() as db:
-        db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                token_hash TEXT,
-                profile_json TEXT NOT NULL DEFAULT '{}',
-                partner_username TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
+        if db.backend == "postgres":
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS "user" (
+                    id BIGSERIAL PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    token_hash TEXT,
+                    profile_json TEXT NOT NULL DEFAULT '{}',
+                    partner_username TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS sync_snapshot (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES user(id)
-            );
+                CREATE TABLE IF NOT EXISTS sync_snapshot (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES "user"(id),
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS sync_commit (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                version INTEGER NOT NULL,
-                snapshot_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES user(id),
-                UNIQUE(user_id, version)
-            );
+                CREATE TABLE IF NOT EXISTS sync_commit (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES "user"(id),
+                    version INTEGER NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, version)
+                );
 
-            CREATE TABLE IF NOT EXISTS share_message (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sender_id INTEGER NOT NULL,
-                recipient_id INTEGER NOT NULL,
-                sentence_json TEXT NOT NULL,
-                comment TEXT NOT NULL DEFAULT '',
-                read_at TEXT,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(sender_id) REFERENCES user(id),
-                FOREIGN KEY(recipient_id) REFERENCES user(id)
-            );
+                CREATE TABLE IF NOT EXISTS share_message (
+                    id BIGSERIAL PRIMARY KEY,
+                    sender_id BIGINT NOT NULL REFERENCES "user"(id),
+                    recipient_id BIGINT NOT NULL REFERENCES "user"(id),
+                    sentence_json TEXT NOT NULL,
+                    comment TEXT NOT NULL DEFAULT '',
+                    read_at TEXT,
+                    created_at TEXT NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS partner_request (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                from_user_id INTEGER NOT NULL,
-                to_user_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT NOT NULL,
-                responded_at TEXT,
-                FOREIGN KEY(from_user_id) REFERENCES user(id),
-                FOREIGN KEY(to_user_id) REFERENCES user(id)
-            );
-            """
-        )
-        cols = {row["name"] for row in db.execute("PRAGMA table_info(user)").fetchall()}
+                CREATE TABLE IF NOT EXISTS partner_request (
+                    id BIGSERIAL PRIMARY KEY,
+                    from_user_id BIGINT NOT NULL REFERENCES "user"(id),
+                    to_user_id BIGINT NOT NULL REFERENCES "user"(id),
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    responded_at TEXT
+                );
+                """
+            )
+            cols = {
+                row["column_name"]
+                for row in db.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = 'user'"
+                ).fetchall()
+            }
+        else:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS "user" (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    token_hash TEXT,
+                    profile_json TEXT NOT NULL DEFAULT '{}',
+                    partner_username TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS sync_snapshot (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES "user"(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS sync_commit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    version INTEGER NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES "user"(id),
+                    UNIQUE(user_id, version)
+                );
+
+                CREATE TABLE IF NOT EXISTS share_message (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id INTEGER NOT NULL,
+                    recipient_id INTEGER NOT NULL,
+                    sentence_json TEXT NOT NULL,
+                    comment TEXT NOT NULL DEFAULT '',
+                    read_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(sender_id) REFERENCES "user"(id),
+                    FOREIGN KEY(recipient_id) REFERENCES "user"(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS partner_request (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    from_user_id INTEGER NOT NULL,
+                    to_user_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    responded_at TEXT,
+                    FOREIGN KEY(from_user_id) REFERENCES "user"(id),
+                    FOREIGN KEY(to_user_id) REFERENCES "user"(id)
+                );
+                """
+            )
+            cols = {row["name"] for row in db.execute('PRAGMA table_info("user")').fetchall()}
         if "last_login_at" not in cols:
-            db.execute("ALTER TABLE user ADD COLUMN last_login_at TEXT")
+            db.execute('ALTER TABLE "user" ADD COLUMN last_login_at TEXT')
 
 
 def password_hash(password: str, salt: str) -> str:
@@ -324,7 +484,7 @@ def current_user(authorization: str = Header(default="")) -> sqlite3.Row:
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail="missing bearer token")
     with conn() as db:
-        row = db.execute("SELECT * FROM user WHERE token_hash = ?", (token_hash(token),)).fetchone()
+        row = db.execute('SELECT * FROM "user" WHERE token_hash = ?', (token_hash(token),)).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="invalid token")
     return row
@@ -352,7 +512,7 @@ def admin_users(_ok: bool = Depends(require_admin)):
             """
             SELECT id, username, password_hash, salt, token_hash, profile_json,
                    partner_username, created_at, updated_at, last_login_at
-            FROM user
+            FROM "user"
             ORDER BY id DESC
             """
         ).fetchall()
@@ -361,8 +521,8 @@ def admin_users(_ok: bool = Depends(require_admin)):
             SELECT r.id, r.status, r.created_at, r.responded_at,
                    fu.username AS from_username, tu.username AS to_username
             FROM partner_request r
-            JOIN user fu ON fu.id = r.from_user_id
-            JOIN user tu ON tu.id = r.to_user_id
+            JOIN "user" fu ON fu.id = r.from_user_id
+            JOIN "user" tu ON tu.id = r.to_user_id
             ORDER BY r.id DESC
             LIMIT 100
             """
@@ -371,7 +531,7 @@ def admin_users(_ok: bool = Depends(require_admin)):
             """
             SELECT c.id, c.user_id, c.version, c.created_at, u.username
             FROM sync_commit c
-            JOIN user u ON u.id = c.user_id
+            JOIN "user" u ON u.id = c.user_id
             ORDER BY c.id DESC
             LIMIT 200
             """
@@ -394,7 +554,7 @@ def admin_reset_password(payload: AdminResetPasswordPayload, _ok: bool = Depends
     pwd_hash = password_hash(payload.password, salt)
     with conn() as db:
         cur = db.execute(
-            "UPDATE user SET password_hash = ?, salt = ?, updated_at = ? WHERE username = ?",
+            'UPDATE "user" SET password_hash = ?, salt = ?, updated_at = ? WHERE username = ?',
             (pwd_hash, salt, utc_now(), username),
         )
     if cur.rowcount <= 0:
@@ -409,7 +569,7 @@ def admin_page(_ok: bool = Depends(require_admin)):
             """
             SELECT id, username, password_hash, salt, token_hash, profile_json,
                    partner_username, created_at, updated_at, last_login_at
-            FROM user
+            FROM "user"
             ORDER BY id DESC
             """
         ).fetchall()
@@ -418,8 +578,8 @@ def admin_page(_ok: bool = Depends(require_admin)):
             SELECT r.id, r.status, r.created_at, r.responded_at,
                    fu.username AS from_username, tu.username AS to_username
             FROM partner_request r
-            JOIN user fu ON fu.id = r.from_user_id
-            JOIN user tu ON tu.id = r.to_user_id
+            JOIN "user" fu ON fu.id = r.from_user_id
+            JOIN "user" tu ON tu.id = r.to_user_id
             ORDER BY r.id DESC
             LIMIT 100
             """
@@ -428,7 +588,7 @@ def admin_page(_ok: bool = Depends(require_admin)):
             """
             SELECT c.id, c.user_id, c.version, c.created_at, u.username
             FROM sync_commit c
-            JOIN user u ON u.id = c.user_id
+            JOIN "user" u ON u.id = c.user_id
             ORDER BY c.id DESC
             LIMIT 200
             """
@@ -570,13 +730,15 @@ def register(payload: AuthPayload):
         with conn() as db:
             db.execute(
                 """
-                INSERT INTO user (username, password_hash, salt, token_hash, created_at, updated_at)
+                INSERT INTO "user" (username, password_hash, salt, token_hash, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (username, password_hash(payload.password, salt), salt, token_hash(token), now, now),
             )
-            db.execute("UPDATE user SET last_login_at = ? WHERE username = ?", (now, username))
-    except sqlite3.IntegrityError as exc:
+            db.execute('UPDATE "user" SET last_login_at = ? WHERE username = ?', (now, username))
+    except Exception as exc:
+        if not _is_unique_violation(exc):
+            raise
         raise HTTPException(status_code=409, detail="username already exists") from exc
     return {"access_token": token, "token_type": "bearer"}
 
@@ -584,7 +746,7 @@ def register(payload: AuthPayload):
 @app.post("/auth/login")
 def login(payload: AuthPayload):
     with conn() as db:
-        row = db.execute("SELECT * FROM user WHERE username = ?", (payload.username.strip(),)).fetchone()
+        row = db.execute('SELECT * FROM "user" WHERE username = ?', (payload.username.strip(),)).fetchone()
         if not row:
             raise HTTPException(status_code=401, detail="invalid username or password")
         expected = password_hash(payload.password, row["salt"])
@@ -592,7 +754,7 @@ def login(payload: AuthPayload):
             raise HTTPException(status_code=401, detail="invalid username or password")
         token = secrets.token_urlsafe(32)
         db.execute(
-            "UPDATE user SET token_hash = ?, updated_at = ?, last_login_at = ? WHERE id = ?",
+            'UPDATE "user" SET token_hash = ?, updated_at = ?, last_login_at = ? WHERE id = ?',
             (token_hash(token), utc_now(), utc_now(), int(row["id"])),
         )
     return {"access_token": token, "token_type": "bearer"}
@@ -601,7 +763,7 @@ def login(payload: AuthPayload):
 @app.post("/auth/logout")
 def logout(user: sqlite3.Row = Depends(current_user)):
     with conn() as db:
-        db.execute("UPDATE user SET token_hash = NULL, updated_at = ? WHERE id = ?", (utc_now(), int(user["id"])))
+        db.execute('UPDATE "user" SET token_hash = NULL, updated_at = ? WHERE id = ?', (utc_now(), int(user["id"])))
     return {"ok": True}
 
 
@@ -613,7 +775,7 @@ def me(user: sqlite3.Row = Depends(current_user)):
         profile = _stored_profile(db, user)
         if partner_username:
             partner_row = db.execute(
-                "SELECT id, username, profile_json, last_login_at FROM user WHERE username = ?",
+                'SELECT id, username, profile_json, last_login_at FROM "user" WHERE username = ?',
                 (partner_username,),
             ).fetchone()
             if partner_row:
@@ -635,7 +797,7 @@ def me(user: sqlite3.Row = Depends(current_user)):
 def update_profile(profile: dict, user: sqlite3.Row = Depends(current_user)):
     with conn() as db:
         db.execute(
-            "UPDATE user SET profile_json = ?, updated_at = ? WHERE id = ?",
+            'UPDATE "user" SET profile_json = ?, updated_at = ? WHERE id = ?',
             (json.dumps(profile, ensure_ascii=False), utc_now(), int(user["id"])),
         )
     return {"ok": True}
@@ -646,18 +808,18 @@ def bind_partner(payload: PartnerPayload, user: sqlite3.Row = Depends(current_us
     partner = payload.partner_username.strip()
     with conn() as db:
         if partner:
-            exists = db.execute("SELECT id FROM user WHERE username = ?", (partner,)).fetchone()
+            exists = db.execute('SELECT id FROM "user" WHERE username = ?', (partner,)).fetchone()
             if not exists:
                 raise HTTPException(status_code=404, detail="partner not found")
         db.execute(
-            "UPDATE user SET partner_username = ?, updated_at = ? WHERE id = ?",
+            'UPDATE "user" SET partner_username = ?, updated_at = ? WHERE id = ?',
             (partner, utc_now(), int(user["id"])),
         )
     return {"ok": True, "partner_username": partner}
 
 
 def _has_partner(db: sqlite3.Connection, user_id: int) -> bool:
-    row = db.execute("SELECT partner_username FROM user WHERE id = ?", (user_id,)).fetchone()
+    row = db.execute('SELECT partner_username FROM "user" WHERE id = ?', (user_id,)).fetchone()
     if not row:
         return False
     return bool(str(row["partner_username"] or "").strip())
@@ -673,7 +835,7 @@ def create_partner_request(payload: PartnerRequestPayload, user: sqlite3.Row = D
     with conn() as db:
         if _has_partner(db, int(user["id"])):
             raise HTTPException(status_code=400, detail="you already have a partner")
-        target_row = db.execute("SELECT id, partner_username FROM user WHERE username = ?", (target,)).fetchone()
+        target_row = db.execute('SELECT id, partner_username FROM "user" WHERE username = ?', (target,)).fetchone()
         if not target_row:
             raise HTTPException(status_code=404, detail="partner not found")
         if str(target_row["partner_username"] or "").strip():
@@ -688,14 +850,15 @@ def create_partner_request(payload: PartnerRequestPayload, user: sqlite3.Row = D
         ).fetchone()
         if exists:
             return {"ok": True, "id": int(exists["id"]), "status": "pending"}
-        cur = db.execute(
+        request_id = _insert_and_get_id(
+            db,
             """
             INSERT INTO partner_request (from_user_id, to_user_id, status, created_at)
             VALUES (?, ?, 'pending', ?)
             """,
             (int(user["id"]), int(target_row["id"]), utc_now()),
         )
-    return {"ok": True, "id": int(cur.lastrowid), "status": "pending"}
+    return {"ok": True, "id": request_id, "status": "pending"}
 
 
 @app.get("/partner/state")
@@ -705,7 +868,7 @@ def partner_state(user: sqlite3.Row = Depends(current_user)):
         partner_username = str(user["partner_username"] or "").strip()
         if partner_username:
             partner_row = db.execute(
-                "SELECT id, username, profile_json, last_login_at FROM user WHERE username = ?",
+                'SELECT id, username, profile_json, last_login_at FROM "user" WHERE username = ?',
                 (partner_username,),
             ).fetchone()
             if partner_row:
@@ -722,7 +885,7 @@ def partner_state(user: sqlite3.Row = Depends(current_user)):
             """
             SELECT r.id, r.created_at, u.username AS from_username, u.profile_json AS from_profile
             FROM partner_request r
-            JOIN user u ON u.id = r.from_user_id
+            JOIN "user" u ON u.id = r.from_user_id
             WHERE r.to_user_id = ? AND r.status = 'pending'
             ORDER BY r.id DESC
             """,
@@ -732,7 +895,7 @@ def partner_state(user: sqlite3.Row = Depends(current_user)):
             """
             SELECT r.id, r.created_at, u.username AS to_username
             FROM partner_request r
-            JOIN user u ON u.id = r.to_user_id
+            JOIN "user" u ON u.id = r.to_user_id
             WHERE r.from_user_id = ? AND r.status = 'pending'
             ORDER BY r.id DESC
             """,
@@ -768,7 +931,7 @@ def accept_partner_request(request_id: int, user: sqlite3.Row = Depends(current_
             """
             SELECT r.id, r.from_user_id, r.to_user_id, r.status, f.username AS from_username
             FROM partner_request r
-            JOIN user f ON f.id = r.from_user_id
+            JOIN "user" f ON f.id = r.from_user_id
             WHERE r.id = ? AND r.to_user_id = ?
             """,
             (request_id, int(user["id"])),
@@ -782,11 +945,11 @@ def accept_partner_request(request_id: int, user: sqlite3.Row = Depends(current_
 
         now = utc_now()
         db.execute(
-            "UPDATE user SET partner_username = ?, updated_at = ? WHERE id = ?",
+            'UPDATE "user" SET partner_username = ?, updated_at = ? WHERE id = ?',
             (req["from_username"], now, int(user["id"])),
         )
         db.execute(
-            "UPDATE user SET partner_username = ?, updated_at = ? WHERE id = ?",
+            'UPDATE "user" SET partner_username = ?, updated_at = ? WHERE id = ?',
             (user["username"], now, int(req["from_user_id"])),
         )
         db.execute(
@@ -813,10 +976,11 @@ def share_sentence(payload: SharePayload, user: sqlite3.Row = Depends(current_us
     if not recipient_name:
         raise HTTPException(status_code=400, detail="partner is not configured")
     with conn() as db:
-        recipient = db.execute("SELECT id, username FROM user WHERE username = ?", (recipient_name,)).fetchone()
+        recipient = db.execute('SELECT id, username FROM "user" WHERE username = ?', (recipient_name,)).fetchone()
         if not recipient:
             raise HTTPException(status_code=404, detail="partner not found")
-        cur = db.execute(
+        share_id = _insert_and_get_id(
+            db,
             """
             INSERT INTO share_message (sender_id, recipient_id, sentence_json, comment, created_at)
             VALUES (?, ?, ?, ?, ?)
@@ -829,7 +993,7 @@ def share_sentence(payload: SharePayload, user: sqlite3.Row = Depends(current_us
                 utc_now(),
             ),
         )
-    return {"ok": True, "id": int(cur.lastrowid)}
+    return {"ok": True, "id": share_id}
 
 
 @app.get("/shares/unread")
@@ -839,7 +1003,7 @@ def unread_shares(user: sqlite3.Row = Depends(current_user)):
             """
             SELECT m.id, m.sentence_json, m.comment, m.created_at, u.username AS sender_username, u.profile_json AS sender_profile
             FROM share_message m
-            JOIN user u ON u.id = m.sender_id
+            JOIN "user" u ON u.id = m.sender_id
             WHERE m.recipient_id = ? AND m.read_at IS NULL
             ORDER BY m.id DESC
             LIMIT 50
@@ -903,12 +1067,12 @@ def sync_push(payload: SyncPayload, user: sqlite3.Row = Depends(current_user)):
             (user_id, json.dumps(next_snapshot, ensure_ascii=False), now),
         )
         db.execute(
-            "UPDATE user SET updated_at = ?, profile_json = ? WHERE id = ?",
+            'UPDATE "user" SET updated_at = ?, profile_json = ? WHERE id = ?',
             (now, json.dumps(_profile_payload(next_snapshot), ensure_ascii=False), user_id),
         )
         partner_payload = None
         if user["partner_username"]:
-            partner = db.execute("SELECT id FROM user WHERE username = ?", (user["partner_username"],)).fetchone()
+            partner = db.execute('SELECT id FROM "user" WHERE username = ?', (user["partner_username"],)).fetchone()
             if partner:
                 p_version, p_snapshot = _latest_commit(db, int(partner["id"]))
                 if p_version > 0:

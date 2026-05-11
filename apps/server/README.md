@@ -10,6 +10,12 @@ pip install -e .
 uvicorn app.main:app --host 127.0.0.1 --port 18321
 ```
 
+默认使用项目内的 SQLite 文件。生产环境建议配置 PostgreSQL：
+
+```bash
+export DATABASE_URL="postgresql+psycopg://drama_user:your-password@127.0.0.1:5432/drama_wordbook"
+```
+
 生产环境请使用 Caddy/Nginx/Traefik 终止 TLS，并把外部地址配置成 `https://your-domain`。桌面端对公网同步地址会拒绝明文 HTTP，只允许 `https://`，本机调试可用 `http://127.0.0.1` 或 `http://localhost`。
 
 ## 调试管理界面
