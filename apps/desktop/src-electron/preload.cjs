@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld("wordbookDesktop", {
   restartSidecar: () => ipcRenderer.invoke("sidecar-restart"),
   getSidecarLogs: () => ipcRenderer.invoke("sidecar-logs"),
   clearSidecarLogs: () => ipcRenderer.invoke("sidecar-logs-clear"),
+  getLaunchAtLogin: () => ipcRenderer.invoke("launch-at-login-get"),
+  setLaunchAtLogin: (enabled) => ipcRenderer.invoke("launch-at-login-set", Boolean(enabled)),
   onSidecarStatus: (callback) => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on("sidecar-status", listener);

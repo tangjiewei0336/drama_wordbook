@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, Notification, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -10,11 +10,15 @@ const sidecarHost = "127.0.0.1";
 const sidecarPort = 17321;
 const sidecarBaseUrl = `http://${sidecarHost}:${sidecarPort}`;
 const maxLogEntries = 800;
+const sharePollIntervalMs = 60_000;
 
 let sidecarProcess = null;
 let sidecarStopping = false;
 let healthTimer = null;
 let restartTimer = null;
+let sharePollTimer = null;
+let sharePollBootstrapped = false;
+const seenShareEventKeys = new Set();
 let sidecarStatus = {
   state: "starting",
   pid: null,
@@ -26,6 +30,108 @@ let sidecarStatus = {
   lastExit: null,
 };
 let logEntries = [];
+
+function requestJson(pathname, timeoutMs = 3000) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`${sidecarBaseUrl}${pathname}`, { timeout: timeoutMs }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.on("end", () => {
+        if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+          reject(new Error(`request ${pathname} failed: ${res.statusCode || "unknown"}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body || "{}"));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error(`${pathname} timed out`)));
+    req.on("error", reject);
+  });
+}
+
+function parseClockToMinute(text, fallback = 0, allow24 = false) {
+  const raw = String(text || "").trim();
+  if (allow24 && raw === "24:00") return 24 * 60;
+  const matched = /^(\d{2}):(\d{2})$/.exec(raw);
+  if (!matched) return fallback;
+  const hour = Number(matched[1]);
+  const minute = Number(matched[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return fallback;
+  return hour * 60 + minute;
+}
+
+function inNotifyWindow(settings) {
+  const now = new Date();
+  const minuteOfDay = now.getHours() * 60 + now.getMinutes();
+  const start = parseClockToMinute(settings.notification_window_start, 18 * 60, false);
+  const end = parseClockToMinute(settings.notification_window_end, 24 * 60, true);
+  if (start === end) return true;
+  if (end > start) return minuteOfDay >= start && minuteOfDay < end;
+  return minuteOfDay >= start || minuteOfDay < end;
+}
+
+function appIsInBackground() {
+  const windows = BrowserWindow.getAllWindows();
+  if (!windows.length) return true;
+  return windows.every((win) => win.isMinimized() || !win.isVisible() || !win.isFocused());
+}
+
+async function pollShareNotifications() {
+  if (!sidecarStatus.healthy) return;
+  try {
+    const [space, settings] = await Promise.all([
+      requestJson("/space", 3500),
+      requestJson("/desktop/settings", 2500),
+    ]);
+    const shares = Array.isArray(space?.unread_shares) ? space.unread_shares : [];
+    const eventKeys = [];
+    for (const share of shares) {
+      const shareId = Number(share?.id || 0);
+      if (shareId > 0) eventKeys.push(`share:${shareId}`);
+      for (const reply of Array.isArray(share?.replies) ? share.replies : []) {
+        const replyId = Number(reply?.id || 0);
+        if (replyId > 0) eventKeys.push(`reply:${replyId}`);
+      }
+    }
+    const newKeys = eventKeys.filter((key) => !seenShareEventKeys.has(key));
+    for (const key of eventKeys) seenShareEventKeys.add(key);
+    if (!sharePollBootstrapped) {
+      sharePollBootstrapped = true;
+      return;
+    }
+    if (!newKeys.length || !appIsInBackground() || !inNotifyWindow(settings || {})) return;
+    const newShareCount = newKeys.filter((key) => key.startsWith("share:")).length;
+    const newReplyCount = newKeys.filter((key) => key.startsWith("reply:")).length;
+    const pieces = [];
+    if (newShareCount) pieces.push(`${newShareCount} 条新分享`);
+    if (newReplyCount) pieces.push(`${newReplyCount} 条新评论`);
+    if (!pieces.length || !Notification.isSupported()) return;
+    new Notification({
+      title: "Drama Wordbook",
+      body: `${pieces.join("，")}，点击应用查看`,
+      silent: false,
+    }).show();
+  } catch (error) {
+    addLog("warn", "desktop", `Share poll skipped: ${String(error?.message || error)}`);
+  }
+}
+
+function startSharePollLoop() {
+  if (sharePollTimer) return;
+  sharePollTimer = setInterval(() => {
+    pollShareNotifications();
+  }, sharePollIntervalMs);
+  setTimeout(() => {
+    pollShareNotifications();
+  }, 6000);
+}
 
 function publishLog(entry) {
   logEntries.push(entry);
@@ -297,6 +403,10 @@ function stopSidecar() {
     clearInterval(healthTimer);
     healthTimer = null;
   }
+  if (sharePollTimer) {
+    clearInterval(sharePollTimer);
+    sharePollTimer = null;
+  }
   if (sidecarProcess) {
     sidecarProcess.kill();
     sidecarProcess = null;
@@ -352,11 +462,22 @@ app.whenReady().then(() => {
     sidecarStopping = false;
     await startSidecar();
     startHealthLoop();
+    startSharePollLoop();
     return sidecarStatus;
+  });
+  ipcMain.handle("launch-at-login-get", async () => Boolean(app.getLoginItemSettings().openAtLogin));
+  ipcMain.handle("launch-at-login-set", async (_event, enabled) => {
+    const shouldEnable = Boolean(enabled);
+    app.setLoginItemSettings({
+      openAtLogin: shouldEnable,
+      openAsHidden: true,
+    });
+    return Boolean(app.getLoginItemSettings().openAtLogin);
   });
 
   startSidecar();
   startHealthLoop();
+  startSharePollLoop();
   createWindow();
 
   app.on("activate", () => {

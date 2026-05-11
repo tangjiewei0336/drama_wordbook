@@ -3,16 +3,19 @@ from __future__ import annotations
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
 import logging
+import json
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.models.schemas import (
     AsrChunk,
     AsrTranscribeRequest,
     AsrTranscribeResponse,
+    DesktopSettings,
+    DesktopSettingsUpdateRequest,
     DictLookupRequest,
     DictLookupResponse,
     JaToken,
@@ -65,7 +68,9 @@ from app.services.vocab_service import (
     get_by_player,
     get_by_time,
     get_profile,
+    get_desktop_settings,
     get_partner_state,
+    get_recent_share_comments,
     get_sentence,
     get_sentence_screenshot_path,
     get_head_items,
@@ -77,16 +82,20 @@ from app.services.vocab_service import (
     get_sync_conflicts,
     get_vocab_count,
     get_unread_shares,
+    fetch_share_screenshot_bytes,
     init_db,
     is_sync_logged_in,
     login_sync_server,
     logout_sync_server,
     register_sync_server,
+    reply_share_message,
     pull_remote_changes,
     resolve_sync_conflict,
     save_profile,
+    save_desktop_settings,
     save_sync_config,
     schedule_sync,
+    collect_shared_sentence,
     share_sentence_to_partner,
     update_sentence,
     update_item_text,
@@ -297,6 +306,7 @@ def drama_space():
         "recent_series": get_recent_series(8),
         "total_words": get_vocab_count(),
         "unread_shares": get_unread_shares(),
+        "recent_share_comments": get_recent_share_comments(),
         "partner": partner_state.get("partner"),
         "can_send_partner_request": bool(partner_state.get("can_send_request")),
         "partner_inbound_requests": partner_state.get("inbound_requests") or [],
@@ -327,6 +337,33 @@ def share_sentence(payload: ShareSentenceRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/shares/{share_id}/reply")
+def share_reply(share_id: int, payload: dict):
+    try:
+        return reply_share_message(share_id, str(payload.get("comment") or ""))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/shares/{share_id}/screenshot")
+def share_screenshot(share_id: int):
+    try:
+        raw = fetch_share_screenshot_bytes(share_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content=raw, media_type="image/png")
+
+
+@app.post("/shares/{share_id}/collect")
+def share_collect(share_id: int, payload: dict):
+    try:
+        data = dict(payload or {})
+        data["id"] = int(share_id)
+        return collect_shared_sentence(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/sync/config", response_model=SyncConfig)
 def sync_config_get():
     return SyncConfig(**get_sync_config())
@@ -336,6 +373,23 @@ def sync_config_get():
 def sync_config_patch(payload: SyncConfigUpdateRequest):
     interval = max(0, min(int(payload.auto_sync_interval_minutes or 0), 1440))
     return SyncConfig(**save_sync_config({"auto_sync_interval_minutes": interval}))
+
+
+@app.get("/desktop/settings", response_model=DesktopSettings)
+def desktop_settings_get():
+    return DesktopSettings(**get_desktop_settings())
+
+
+@app.patch("/desktop/settings", response_model=DesktopSettings)
+def desktop_settings_patch(payload: DesktopSettingsUpdateRequest):
+    return DesktopSettings(
+        **save_desktop_settings(
+            {
+                "notification_window_start": payload.notification_window_start,
+                "notification_window_end": payload.notification_window_end,
+            }
+        )
+    )
 
 
 @app.post("/sync/login", response_model=SyncConfig)

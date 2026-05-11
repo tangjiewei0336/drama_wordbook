@@ -111,6 +111,12 @@ export type Profile = {
   nickname: string;
   avatar_data_url: string;
   theme_color: string;
+  signature?: string;
+};
+
+export type DesktopSettings = {
+  notification_window_start: string;
+  notification_window_end: string;
 };
 
 export type SyncConfig = {
@@ -163,7 +169,20 @@ export type DramaSpace = {
     created_at: string;
     sender_username: string;
     sender_profile: Partial<Profile>;
+    parent_share_id?: number;
+    has_screenshot?: boolean;
+    replies?: Array<{
+      id: number;
+      sentence: SentenceRecord;
+      comment: string;
+      created_at: string;
+      sender_username: string;
+      sender_profile: Partial<Profile>;
+      parent_share_id?: number;
+      has_screenshot?: boolean;
+    }>;
   }>;
+  recent_share_comments?: Array<{ id: number; comment: string; created_at: string }>;
 };
 
 export const SIDECAR_BASE = "http://127.0.0.1:17321";
@@ -250,6 +269,20 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
   return (await res.json()) as Profile;
 }
 
+export async function fetchDesktopSettings(): Promise<DesktopSettings> {
+  return getJson<DesktopSettings>("/desktop/settings");
+}
+
+export async function updateDesktopSettings(payload: Partial<DesktopSettings>): Promise<DesktopSettings> {
+  const res = await fetch(`${SIDECAR_BASE}/desktop/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `更新桌面设置失败（${res.status}）`));
+  return (await res.json()) as DesktopSettings;
+}
+
 export async function fetchSyncConfig(): Promise<SyncConfig> {
   return getJson<SyncConfig>("/sync/config");
 }
@@ -328,6 +361,26 @@ export async function shareSentence(sentenceId: number, recipientUsername: strin
   });
   if (!res.ok) throw new Error(await parseApiError(res, `分享失败（${res.status}）`));
   return (await res.json()) as { ok: boolean; id?: number };
+}
+
+export async function replyShare(shareId: number, comment: string): Promise<{ ok: boolean; id?: number }> {
+  const res = await fetch(`${SIDECAR_BASE}/shares/${shareId}/reply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comment }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `回复失败（${res.status}）`));
+  return (await res.json()) as { ok: boolean; id?: number };
+}
+
+export async function collectShareSentence(share: DramaSpace["unread_shares"][number]): Promise<{ ok: boolean; sentence_id?: number }> {
+  const res = await fetch(`${SIDECAR_BASE}/shares/${share.id}/collect`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(share),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `收藏失败（${res.status}）`));
+  return (await res.json()) as { ok: boolean; sentence_id?: number };
 }
 
 export async function createPartnerRequest(partnerUsername: string): Promise<{ ok: boolean; id?: number; status?: string }> {
@@ -424,4 +477,8 @@ export function screenshotUrl(itemId: number): string {
 
 export function sentenceScreenshotUrl(sentenceId: number): string {
   return `${SIDECAR_BASE}/sentences/${sentenceId}/screenshot`;
+}
+
+export function shareScreenshotUrl(shareId: number): string {
+  return `${SIDECAR_BASE}/shares/${shareId}/screenshot`;
 }
