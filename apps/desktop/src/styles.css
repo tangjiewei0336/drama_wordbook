@@ -977,6 +977,53 @@ button {
   color: #667085;
 }
 
+.share-comment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 10px;
+}
+
+.share-comment-editor {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.share-comment-tags {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.share-comment-tags > span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.share-comment-tags > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 112px;
+  overflow: auto;
+}
+
+.tag-button {
+  border: 1px solid #dfe5eb;
+  border-radius: 999px;
+  background: #fff;
+  color: #344054;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.tag-button:hover {
+  border-color: color-mix(in srgb, var(--theme-color) 45%, #dfe5eb);
+}
+
 .sentence-token-row {
   display: flex;
   flex-wrap: wrap;
@@ -1135,9 +1182,11 @@ button {
 
 .space-pane {
   grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .space-top-panel {
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
   gap: 14px;
@@ -1265,24 +1314,39 @@ button {
 }
 
 .unread-share-panel {
-  max-height: 220px;
+  min-height: 0;
+  max-height: min(46vh, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .unread-share-list {
+  min-height: 0;
+  flex: 1;
   display: flex;
   gap: 10px;
-  overflow: auto;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
 }
 
 .unread-share-card {
-  flex: 0 0 min(360px, 86vw);
+  flex: 0 0 min(420px, 88vw);
+  min-width: 0;
+  max-height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 9px;
   border: 1px solid color-mix(in srgb, var(--partner-color) 30%, #e7ebef);
   border-radius: 8px;
   padding: 12px;
   background: color-mix(in srgb, var(--partner-color) 8%, white);
+  overflow: hidden;
 }
 
-.unread-share-card div {
+.share-header {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -1290,28 +1354,102 @@ button {
   font-size: 12px;
 }
 
-.unread-share-card strong {
+.share-header strong {
   color: #18202b;
 }
 
-.unread-share-card p {
-  margin: 9px 0;
-  color: #344054;
-  line-height: 1.45;
+.share-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 10px;
 }
 
-.unread-share-card blockquote {
+.share-main {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.share-main blockquote {
   margin: 0;
   color: #111827;
   font-weight: 800;
   line-height: 1.5;
 }
 
-.unread-share-card small {
+.share-main small {
   display: block;
-  margin-top: 5px;
   color: #667085;
   line-height: 1.45;
+}
+
+.share-shot {
+  width: 100%;
+  max-height: 180px;
+  margin-top: 8px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid #dfe5eb;
+  background: #111827;
+}
+
+.share-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.share-icon-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.share-comment-tags {
+  min-height: 0;
+  border-left: 1px dashed #d7dde5;
+  padding-left: 10px;
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+}
+
+.share-comment-tag {
+  display: grid;
+  gap: 2px;
+  border-radius: 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--partner-color) 26%, #d7dde5);
+  background: #fff;
+}
+
+.share-comment-tag strong {
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.share-comment-tag span {
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.35;
+}
+
+.share-reply-box {
+  margin-top: 9px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.share-reply-box input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #dfe5eb;
+  border-radius: 8px;
+  padding: 0 10px;
+  outline: none;
+  background: #fff;
 }
 
 .activity-board {
@@ -1412,6 +1550,7 @@ button {
 
 .series-grid {
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
@@ -1648,6 +1787,37 @@ button {
   font-size: 13px;
 }
 
+.desktop-settings-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e7ebef;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.setting-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.setting-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.time-window-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.time-window-row select {
+  min-width: 110px;
+}
+
 .sync-conflict-panel {
   display: grid;
   gap: 8px;
@@ -1851,6 +2021,18 @@ button {
 
   .space-top-panel {
     grid-template-columns: 1fr;
+  }
+
+  .share-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .share-comment-tags {
+    border-left: 0;
+    border-top: 1px dashed #d7dde5;
+    padding-left: 0;
+    padding-top: 8px;
+    max-height: 120px;
   }
 }
 

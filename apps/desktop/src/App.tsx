@@ -35,6 +35,8 @@ import {
   fetchByPlayer,
   fetchByTime,
   createPartnerRequest,
+  collectShareSentence,
+  fetchDesktopSettings,
   fetchDramaSpace,
   fetchSyncConflicts,
   fetchHeadItems,
@@ -45,6 +47,7 @@ import {
   acceptPartnerRequest,
   loginSync,
   logoutSync,
+  replyShare,
   pullSync,
   resolveSyncConflict,
   registerSync,
@@ -53,14 +56,17 @@ import {
   saveProfile,
   sentenceScreenshotUrl,
   shareSentence,
+  shareScreenshotUrl,
   screenshotUrl,
   SIDECAR_BASE,
   startAsrModelLoad,
   tokenizeJapanese,
   updateSentence,
+  updateDesktopSettings,
   updateSyncConfig,
   type AsrModelStatus,
   type DictLookupResult,
+  type DesktopSettings,
   type HealthStatus,
   type JaToken,
   type PlayerNode,
@@ -123,6 +129,19 @@ function formatBytes(bytes = 0): string {
   return `${(bytes / 1_000_000).toFixed(0)} MB`;
 }
 
+function withPlaybackTime(url: string, currentTime = 0): string {
+  const clean = String(url || "").trim();
+  if (!clean) return "";
+  try {
+    const parsed = new URL(clean);
+    const sec = Math.max(0, Math.floor(Number(currentTime || 0)));
+    if (sec > 0) parsed.searchParams.set("t", String(sec));
+    return parsed.toString();
+  } catch {
+    return clean;
+  }
+}
+
 function uniqueMeanings(items: VocabItem[]): string[] {
   return Array.from(
     new Set(items.flatMap((item) => item.meanings || []).map((item) => String(item).trim()).filter(Boolean))
@@ -164,6 +183,8 @@ function normalizeSentenceText(item: VocabItem): string {
 
 const CIRCLED_NUMBERS = ["⓪", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
 const THEME_COLORS = ["#2e8f76", "#d65f4a", "#4f7cff", "#a85539", "#7c3aed", "#0f766e"];
+const START_HOUR_OPTIONS = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
+const END_HOUR_OPTIONS = [...START_HOUR_OPTIONS, "24:00"];
 const PRESET_AVATARS: PresetAvatar[] = [
   { id: "avatar-01", originalName: "你不要过来啊", thumbUrl: avatar01Thumb, fullUrl: avatar01Full },
   { id: "avatar-02", originalName: "高兴的小男孩", thumbUrl: avatar02Thumb, fullUrl: avatar02Full },
@@ -225,7 +246,14 @@ export default function App() {
     nickname: "Drama Learner",
     avatar_data_url: "",
     theme_color: "#2e8f76",
+    signature: "",
   });
+  const [desktopSettings, setDesktopSettings] = useState<DesktopSettings>({
+    notification_window_start: "18:00",
+    notification_window_end: "24:00",
+  });
+  const [launchAtLogin, setLaunchAtLogin] = useState(false);
+  const [desktopSettingBusy, setDesktopSettingBusy] = useState(false);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ server_url: "", access_token: "", username: "", last_sync_at: "", last_server_version: 0, auto_sync_interval_minutes: 0 });
   const [loginForm, setLoginForm] = useState({ serverUrl: "", username: "", password: "" });
   const [selectedItems, setSelectedItems] = useState<VocabItem[]>([]);
@@ -242,6 +270,7 @@ export default function App() {
   const [editingSentence, setEditingSentence] = useState(false);
   const [sharingSentence, setSharingSentence] = useState(false);
   const [shareComment, setShareComment] = useState("");
+  const [replyDraftByShare, setReplyDraftByShare] = useState<Record<number, string>>({});
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [avatarSelectingId, setAvatarSelectingId] = useState("");
@@ -273,7 +302,7 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [healthRes, nodes, timeList, sentenceList, profileRes, syncRes, spaceRes] = await Promise.all([
+      const [healthRes, nodes, timeList, sentenceList, profileRes, syncRes, spaceRes, desktopSettingRes] = await Promise.all([
         fetchHealth(),
         fetchByPlayer(),
         fetchByTime(),
@@ -281,6 +310,7 @@ export default function App() {
         fetchProfile(),
         fetchSyncConfig(),
         fetchDramaSpace(),
+        fetchDesktopSettings(),
       ]);
       setHealth(healthRes);
       if (healthRes.asr) setAsrStatus(healthRes.asr);
@@ -292,6 +322,7 @@ export default function App() {
       setSyncConfig(syncRes);
       setLoginForm((current) => ({ ...current, serverUrl: syncRes.server_url || current.serverUrl, username: syncRes.username || current.username }));
       setSpace(spaceRes);
+      setDesktopSettings(desktopSettingRes);
 
       if (keepSelection && selectedHeadId) {
         setSelectedItems(await fetchHeadItems(selectedHeadId));
@@ -310,6 +341,12 @@ export default function App() {
 
   useEffect(() => {
     loadAll(false);
+  }, []);
+
+  useEffect(() => {
+    window.wordbookDesktop?.getLaunchAtLogin?.().then((enabled) => {
+      setLaunchAtLogin(Boolean(enabled));
+    });
   }, []);
 
   useEffect(() => {
@@ -696,6 +733,35 @@ export default function App() {
     }
   }
 
+  async function onCollectShare(share: NonNullable<DramaSpace["unread_shares"]>[number]) {
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await collectShareSentence(share);
+      await loadAll(true);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setPartnerBusy(false);
+    }
+  }
+
+  async function onReplyShare(shareId: number) {
+    const text = (replyDraftByShare[shareId] || "").trim();
+    if (!text) return;
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await replyShare(shareId, text);
+      setReplyDraftByShare((current) => ({ ...current, [shareId]: "" }));
+      await loadAll(true);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setPartnerBusy(false);
+    }
+  }
+
   function isKnownToken(token: JaToken) {
     return knownWordKeys.has(token.surface) || knownWordKeys.has(token.dictionary_form);
   }
@@ -871,14 +937,26 @@ export default function App() {
                   <strong>{sentenceJa}</strong>
                   {sentenceZh ? <span>{sentenceZh}</span> : null}
                 </div>
-                <label>
-                  <span>评论</span>
-                  <textarea
-                    value={shareComment}
-                    placeholder="写一句想对搭子说的话"
-                    onChange={(event) => setShareComment(event.target.value)}
-                  />
-                </label>
+                <div className="share-comment-row">
+                  <label className="share-comment-editor">
+                    <span>评论</span>
+                    <input
+                      value={shareComment}
+                      placeholder="写一句想对搭子说的话"
+                      onChange={(event) => setShareComment(event.target.value)}
+                    />
+                  </label>
+                  <aside className="share-comment-tags">
+                    <span>常用评论</span>
+                    <div>
+                      {(space?.recent_share_comments || []).map((item) => (
+                        <button key={item.id} className="tag-button" type="button" onClick={() => setShareComment(item.comment)}>
+                          {item.comment}
+                        </button>
+                      ))}
+                    </div>
+                  </aside>
+                </div>
                 <div className="sentence-actions">
                   <button className="runtime-action compact" onClick={onShareSentence} disabled={sentenceBusy}>
                     <Send size={15} />
@@ -1163,6 +1241,36 @@ export default function App() {
     }
   }
 
+  async function onToggleLaunchAtLogin(enabled: boolean) {
+    setDesktopSettingBusy(true);
+    setError("");
+    try {
+      if (window.wordbookDesktop?.setLaunchAtLogin) {
+        const next = await window.wordbookDesktop.setLaunchAtLogin(enabled);
+        setLaunchAtLogin(Boolean(next));
+      } else {
+        setLaunchAtLogin(enabled);
+      }
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setDesktopSettingBusy(false);
+    }
+  }
+
+  async function onUpdateNotificationWindow(partial: Partial<DesktopSettings>) {
+    setDesktopSettingBusy(true);
+    setError("");
+    try {
+      const saved = await updateDesktopSettings(partial);
+      setDesktopSettings(saved);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setDesktopSettingBusy(false);
+    }
+  }
+
   async function onCreatePartnerRequest() {
     const target = partnerRequestName.trim();
     if (!target || !space?.can_send_partner_request) return;
@@ -1276,7 +1384,7 @@ export default function App() {
         latest = await resolveSyncConflict(item.type, item.uuid, strategy);
       }
       setSyncConflicts(latest.items || []);
-    } catch (err) {
+    } catch (err) { 
       setError(String((err as Error).message || err));
     } finally {
       setResolvingConflictKey("");
@@ -1484,13 +1592,59 @@ export default function App() {
             <div className="unread-share-list">
               {unreadShares.map((share) => (
                 <article className="unread-share-card" key={share.id}>
-                  <div>
+                  <div className="share-header">
                     <strong>{share.sender_profile?.nickname || share.sender_username}</strong>
                     <span>{formatDate(share.created_at)}</span>
                   </div>
-                  <p>{share.comment || "分享了一句台词给你。"}</p>
-                  <blockquote>{share.sentence?.example_ja || "未附带句子"}</blockquote>
-                  {share.sentence?.example_zh ? <small>{share.sentence.example_zh}</small> : null}
+                  <div className="share-layout">
+                    <div className="share-main">
+                      {share.has_screenshot ? <img className="share-shot" src={shareScreenshotUrl(share.id)} alt="shared screenshot" /> : null}
+                      <blockquote>{share.sentence?.example_ja || "未附带句子"}</blockquote>
+                      {share.sentence?.example_zh ? <small>{share.sentence.example_zh}</small> : null}
+                    </div>
+                    <div className="share-comment-tags">
+                      {[
+                        {
+                          id: `origin-${share.id}`,
+                          sender: share.sender_profile?.nickname || share.sender_username,
+                          text: (share.comment || "").trim() || "分享了一句台词给你。",
+                        },
+                        ...(share.replies || []).map((reply) => ({
+                          id: String(reply.id),
+                          sender: reply.sender_profile?.nickname || reply.sender_username,
+                          text: reply.comment || "回复了这条分享",
+                        })),
+                      ].map((node) => (
+                        <div key={node.id} className="share-comment-tag">
+                          <strong>{node.sender}</strong>
+                          <span>{node.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="share-actions">
+                    <button
+                      className="icon-button share-icon-btn"
+                      title="跳转播放"
+                      disabled={!share.sentence?.playback?.url}
+                      onClick={() => openExternal(withPlaybackTime(String(share.sentence?.playback?.url || ""), Number(share.sentence?.playback?.current_time || 0)))}
+                    >
+                      <ExternalLink size={14} />
+                    </button>
+                    <button className="icon-button share-icon-btn" title="收藏到我的句子" disabled={partnerBusy} onClick={() => onCollectShare(share)}>
+                      <Save size={14} />
+                    </button>
+                  </div>
+                  <div className="share-reply-box">
+                    <input
+                      value={replyDraftByShare[share.id] || ""}
+                      placeholder="回复这条分享"
+                      onChange={(event) => setReplyDraftByShare((current) => ({ ...current, [share.id]: event.target.value }))}
+                    />
+                    <button className="icon-button share-icon-btn" title="发送回复" disabled={partnerBusy} onClick={() => onReplyShare(share.id)}>
+                      <Send size={15} />
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -1560,6 +1714,15 @@ export default function App() {
               <span>昵称</span>
               <input value={profile.nickname} onChange={(event) => setProfile({ ...profile, nickname: event.target.value })} disabled={loading} />
             </label>
+            <label>
+              <span>个性签名</span>
+              <input
+                value={profile.signature || ""}
+                onChange={(event) => setProfile({ ...profile, signature: event.target.value })}
+                placeholder="输入一句你的追剧宣言"
+                disabled={loading}
+              />
+            </label>
             <div>
               <div className="field-title"><Palette size={15} />主题色</div>
               <div className="swatch-row">
@@ -1615,6 +1778,42 @@ export default function App() {
               <option value="60">每 1 小时</option>
             </select>
           </label>
+          <div className="desktop-settings-panel">
+            <div className="field-title"><Settings size={15} />桌面提醒</div>
+            <label className="setting-toggle">
+              <span>开机启动</span>
+              <input
+                type="checkbox"
+                checked={launchAtLogin}
+                onChange={(event) => onToggleLaunchAtLogin(event.target.checked)}
+                disabled={desktopSettingBusy}
+              />
+            </label>
+            <label>
+              <span>接收系统消息时间</span>
+              <div className="time-window-row">
+                <select
+                  value={desktopSettings.notification_window_start}
+                  onChange={(event) => onUpdateNotificationWindow({ notification_window_start: event.target.value })}
+                  disabled={desktopSettingBusy}
+                >
+                  {START_HOUR_OPTIONS.map((item) => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+                <small>至</small>
+                <select
+                  value={desktopSettings.notification_window_end}
+                  onChange={(event) => onUpdateNotificationWindow({ notification_window_end: event.target.value })}
+                  disabled={desktopSettingBusy}
+                >
+                  {END_HOUR_OPTIONS.map((item) => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+              </div>
+            </label>
+          </div>
           {syncConflicts.length ? (
             <div className="sync-conflict-panel">
               <strong>需要你确认的内容（{syncConflicts.length}）</strong>
@@ -1709,8 +1908,8 @@ export default function App() {
               </div>
               <div className="sentence-editor">
                 <label>
-                  <span>服务器 HTTPS 地址</span>
-                  <input placeholder="https://wordbook.example.com" value={loginForm.serverUrl} onChange={(event) => setLoginForm({ ...loginForm, serverUrl: event.target.value })} />
+                  <span>服务器地址（HTTP/HTTPS）</span>
+                  <input placeholder="http://146.56.195.192" value={loginForm.serverUrl} onChange={(event) => setLoginForm({ ...loginForm, serverUrl: event.target.value })} />
                 </label>
                 <label>
                   <span>用户名</span>
@@ -1744,8 +1943,8 @@ export default function App() {
               </div>
               <div className="sentence-editor">
                 <label>
-                  <span>服务器 HTTPS 地址</span>
-                  <input placeholder="https://wordbook.example.com" value={loginForm.serverUrl} onChange={(event) => setLoginForm({ ...loginForm, serverUrl: event.target.value })} />
+                  <span>服务器地址（HTTP/HTTPS）</span>
+                  <input placeholder="http://146.56.195.192" value={loginForm.serverUrl} onChange={(event) => setLoginForm({ ...loginForm, serverUrl: event.target.value })} />
                 </label>
                 <label>
                   <span>用户名</span>

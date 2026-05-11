@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html
@@ -14,7 +15,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -25,6 +26,7 @@ except Exception:  # pragma: no cover - optional in local sqlite mode
     dict_row = None
 
 DB_PATH = Path(__file__).resolve().parent.parent / "server.sqlite3"
+SHARE_SCREENSHOT_DIR = Path(__file__).resolve().parent.parent / "share_uploads"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 ADMIN_TOKEN = os.getenv("DRAMA_ADMIN_TOKEN", "drama-debug")
 
@@ -132,6 +134,7 @@ def _is_unique_violation(exc: Exception) -> bool:
 
 
 def init_db() -> None:
+    SHARE_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     with conn() as db:
         if db.backend == "postgres":
             db.executescript(
@@ -170,6 +173,8 @@ def init_db() -> None:
                     recipient_id BIGINT NOT NULL REFERENCES "user"(id),
                     sentence_json TEXT NOT NULL,
                     comment TEXT NOT NULL DEFAULT '',
+                    screenshot_path TEXT NOT NULL DEFAULT '',
+                    parent_share_id BIGINT,
                     read_at TEXT,
                     created_at TEXT NOT NULL
                 );
@@ -188,6 +193,12 @@ def init_db() -> None:
                 row["column_name"]
                 for row in db.execute(
                     "SELECT column_name FROM information_schema.columns WHERE table_name = 'user'"
+                ).fetchall()
+            }
+            share_cols = {
+                row["column_name"]
+                for row in db.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = 'share_message'"
                 ).fetchall()
             }
         else:
@@ -229,6 +240,8 @@ def init_db() -> None:
                     recipient_id INTEGER NOT NULL,
                     sentence_json TEXT NOT NULL,
                     comment TEXT NOT NULL DEFAULT '',
+                    screenshot_path TEXT NOT NULL DEFAULT '',
+                    parent_share_id INTEGER,
                     read_at TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(sender_id) REFERENCES "user"(id),
@@ -248,8 +261,13 @@ def init_db() -> None:
                 """
             )
             cols = {row["name"] for row in db.execute('PRAGMA table_info("user")').fetchall()}
+            share_cols = {row["name"] for row in db.execute("PRAGMA table_info(share_message)").fetchall()}
         if "last_login_at" not in cols:
             db.execute('ALTER TABLE "user" ADD COLUMN last_login_at TEXT')
+        if "screenshot_path" not in share_cols:
+            db.execute("ALTER TABLE share_message ADD COLUMN screenshot_path TEXT DEFAULT ''")
+        if "parent_share_id" not in share_cols:
+            db.execute("ALTER TABLE share_message ADD COLUMN parent_share_id INTEGER")
 
 
 def password_hash(password: str, salt: str) -> str:
@@ -258,6 +276,39 @@ def password_hash(password: str, salt: str) -> str:
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _save_share_screenshot(data: str) -> str:
+    clean = str(data or "").strip()
+    if not clean:
+        return ""
+    try:
+        raw = base64.b64decode(clean)
+    except Exception:
+        return ""
+    name = f"{secrets.token_hex(16)}.png"
+    path = SHARE_SCREENSHOT_DIR / name
+    try:
+        path.write_bytes(raw)
+    except Exception:
+        return ""
+    return name
+
+
+def _share_to_response(row: dict, replies: list[dict] | None = None) -> dict:
+    payload = {
+        "id": int(row["id"]),
+        "sentence": json.loads(row["sentence_json"] or "{}"),
+        "comment": row["comment"] or "",
+        "created_at": row["created_at"],
+        "sender_username": row["sender_username"],
+        "sender_profile": json.loads(row["sender_profile"] or "{}"),
+        "parent_share_id": int(row.get("parent_share_id") or 0),
+        "has_screenshot": bool(str(row.get("screenshot_path") or "").strip()),
+    }
+    if replies is not None:
+        payload["replies"] = replies
+    return payload
 
 
 SYNC_ENTITY_TYPES = ("sentences", "vocab_items")
@@ -453,6 +504,8 @@ class SharePayload(BaseModel):
     recipient_username: str = ""
     sentence: dict = Field(default_factory=dict)
     comment: str = ""
+    screenshot_base64: str = ""
+    parent_share_id: int = 0
 
 
 class PartnerRequestPayload(BaseModel):
@@ -982,14 +1035,16 @@ def share_sentence(payload: SharePayload, user: sqlite3.Row = Depends(current_us
         share_id = _insert_and_get_id(
             db,
             """
-            INSERT INTO share_message (sender_id, recipient_id, sentence_json, comment, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO share_message (sender_id, recipient_id, sentence_json, comment, screenshot_path, parent_share_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(user["id"]),
                 int(recipient["id"]),
                 json.dumps(payload.sentence, ensure_ascii=False),
                 payload.comment.strip(),
+                _save_share_screenshot(payload.screenshot_base64),
+                max(0, int(payload.parent_share_id or 0)) or None,
                 utc_now(),
             ),
         )
@@ -999,9 +1054,12 @@ def share_sentence(payload: SharePayload, user: sqlite3.Row = Depends(current_us
 @app.get("/shares/unread")
 def unread_shares(user: sqlite3.Row = Depends(current_user)):
     with conn() as db:
-        rows = db.execute(
+        rows = [
+            dict(row)
+            for row in db.execute(
             """
-            SELECT m.id, m.sentence_json, m.comment, m.created_at, u.username AS sender_username, u.profile_json AS sender_profile
+            SELECT m.id, m.sentence_json, m.comment, m.created_at, m.parent_share_id, m.screenshot_path,
+                   u.username AS sender_username, u.profile_json AS sender_profile
             FROM share_message m
             JOIN "user" u ON u.id = m.sender_id
             WHERE m.recipient_id = ? AND m.read_at IS NULL
@@ -1010,19 +1068,131 @@ def unread_shares(user: sqlite3.Row = Depends(current_user)):
             """,
             (int(user["id"]),),
         ).fetchall()
+        ]
+        share_ids = [int(row["id"]) for row in rows]
+        replies_by_parent: dict[int, list[dict]] = {}
+        if share_ids:
+            replies = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT m.id, m.parent_share_id, m.sentence_json, m.comment, m.created_at, m.screenshot_path,
+                           u.username AS sender_username, u.profile_json AS sender_profile
+                    FROM share_message m
+                    JOIN "user" u ON u.id = m.sender_id
+                    WHERE m.parent_share_id IS NOT NULL
+                      AND m.parent_share_id IN ({placeholders})
+                      AND (m.sender_id = ? OR m.recipient_id = ?)
+                    ORDER BY m.id ASC
+                    """.format(
+                        placeholders=",".join("?" for _ in share_ids)
+                    ),
+                    (*share_ids, int(user["id"]), int(user["id"])),
+                ).fetchall()
+            ]
+            for row in replies:
+                parent_id = int(row["parent_share_id"] or 0)
+                if parent_id <= 0:
+                    continue
+                replies_by_parent.setdefault(parent_id, []).append(_share_to_response(row))
     return {
         "items": [
-            {
-                "id": int(row["id"]),
-                "sentence": json.loads(row["sentence_json"] or "{}"),
-                "comment": row["comment"] or "",
-                "created_at": row["created_at"],
-                "sender_username": row["sender_username"],
-                "sender_profile": json.loads(row["sender_profile"] or "{}"),
-            }
+            _share_to_response(row, replies_by_parent.get(int(row["id"]), []))
             for row in rows
         ]
     }
+
+
+@app.get("/shares/recent-comments")
+def recent_share_comments(user: sqlite3.Row = Depends(current_user)):
+    with conn() as db:
+        rows = db.execute(
+            """
+            SELECT id, comment, created_at
+            FROM share_message
+            WHERE sender_id = ? AND TRIM(comment) != ''
+            ORDER BY id DESC
+            LIMIT 40
+            """,
+            (int(user["id"]),),
+        ).fetchall()
+    items = []
+    seen: set[str] = set()
+    for row in rows:
+        comment = str(row["comment"] or "").strip()
+        if not comment or comment in seen:
+            continue
+        seen.add(comment)
+        items.append({"id": int(row["id"]), "comment": comment, "created_at": row["created_at"]})
+    return {"items": items}
+
+
+@app.post("/shares/{share_id}/reply")
+def reply_share(share_id: int, payload: SharePayload, user: sqlite3.Row = Depends(current_user)):
+    comment = str(payload.comment or "").strip()
+    if not comment:
+        raise HTTPException(status_code=400, detail="reply comment required")
+    with conn() as db:
+        parent = db.execute(
+            """
+            SELECT id, sender_id, recipient_id, sentence_json
+            FROM share_message
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(share_id),),
+        ).fetchone()
+        if not parent:
+            raise HTTPException(status_code=404, detail="share not found")
+        me = int(user["id"])
+        sender_id = int(parent["sender_id"])
+        recipient_id = int(parent["recipient_id"])
+        if me not in (sender_id, recipient_id):
+            raise HTTPException(status_code=403, detail="forbidden")
+        target_user_id = recipient_id if me == sender_id else sender_id
+        reply_id = _insert_and_get_id(
+            db,
+            """
+            INSERT INTO share_message (sender_id, recipient_id, sentence_json, comment, screenshot_path, parent_share_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                me,
+                target_user_id,
+                parent["sentence_json"] or "{}",
+                comment,
+                "",
+                int(share_id),
+                utc_now(),
+            ),
+        )
+    return {"ok": True, "id": reply_id}
+
+
+@app.get("/shares/{share_id}/screenshot")
+def share_screenshot(share_id: int, user: sqlite3.Row = Depends(current_user)):
+    with conn() as db:
+        row = db.execute(
+            """
+            SELECT sender_id, recipient_id, screenshot_path
+            FROM share_message
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(share_id),),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="share not found")
+    me = int(user["id"])
+    if me not in (int(row["sender_id"]), int(row["recipient_id"])):
+        raise HTTPException(status_code=403, detail="forbidden")
+    file_name = str(row["screenshot_path"] or "").strip()
+    if not file_name:
+        raise HTTPException(status_code=404, detail="screenshot not found")
+    path = (SHARE_SCREENSHOT_DIR / file_name).resolve()
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="screenshot not found")
+    return FileResponse(path)
 
 
 @app.post("/shares/{share_id}/read")

@@ -24,6 +24,7 @@ DEFAULT_PROFILE = {
     "nickname": "Drama Learner",
     "avatar_data_url": "",
     "theme_color": "#2e8f76",
+    "signature": "",
 }
 DEFAULT_SYNC_CONFIG = {
     "server_url": "",
@@ -34,6 +35,10 @@ DEFAULT_SYNC_CONFIG = {
     "auto_sync_interval_minutes": 0,
 }
 ALLOWED_THEME_COLORS = {"#2e8f76", "#d65f4a", "#4f7cff", "#a85539", "#7c3aed", "#0f766e"}
+DEFAULT_DESKTOP_SETTINGS = {
+    "notification_window_start": "18:00",
+    "notification_window_end": "24:00",
+}
 
 
 def _utc_now() -> str:
@@ -1086,6 +1091,43 @@ def save_sync_config(config: dict) -> dict:
     return _set_setting("sync_config", {**current, **config})
 
 
+def _normalize_notify_clock(value: str, *, end: bool = False) -> str:
+    text = str(value or "").strip()
+    if end and text == "24:00":
+        return "24:00"
+    if not re.fullmatch(r"\d{2}:\d{2}", text):
+        return "24:00" if end else "18:00"
+    hh, mm = text.split(":", 1)
+    hour = int(hh)
+    minute = int(mm)
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return "24:00" if end else "18:00"
+    return f"{hour:02d}:{minute:02d}"
+
+
+def get_desktop_settings() -> dict:
+    raw = _get_setting("desktop_settings", DEFAULT_DESKTOP_SETTINGS)
+    return {
+        "notification_window_start": _normalize_notify_clock(raw.get("notification_window_start", "18:00"), end=False),
+        "notification_window_end": _normalize_notify_clock(raw.get("notification_window_end", "24:00"), end=True),
+    }
+
+
+def save_desktop_settings(settings: dict) -> dict:
+    current = get_desktop_settings()
+    start_raw = settings.get("notification_window_start")
+    end_raw = settings.get("notification_window_end")
+    next_settings = {
+        "notification_window_start": _normalize_notify_clock(
+            start_raw if start_raw is not None else current.get("notification_window_start", "18:00"), end=False
+        ),
+        "notification_window_end": _normalize_notify_clock(
+            end_raw if end_raw is not None else current.get("notification_window_end", "24:00"), end=True
+        ),
+    }
+    return _set_setting("desktop_settings", next_settings)
+
+
 def _reset_sync_session(config: dict | None = None) -> dict:
     next_config = {**DEFAULT_SYNC_CONFIG, **(config or {})}
     _set_setting("sync_snapshot", {"profile": {}, "sentences": [], "vocab_items": []})
@@ -1095,12 +1137,12 @@ def _reset_sync_session(config: dict | None = None) -> dict:
     return _set_setting("sync_config", next_config)
 
 
-def _https_server_url(server_url: str) -> str:
+def _normalized_server_url(server_url: str) -> str:
     clean = str(server_url or "").strip().rstrip("/")
-    if clean.startswith("http://127.0.0.1") or clean.startswith("http://localhost"):
-        return clean
-    if not clean.startswith("https://"):
-        raise ValueError("公网同步服务器必须使用 HTTPS，避免明文传输数据。")
+    if not clean:
+        return ""
+    if not clean.startswith("http://") and not clean.startswith("https://"):
+        raise ValueError("服务器地址必须以 http:// 或 https:// 开头。")
     return clean
 
 
@@ -1137,7 +1179,7 @@ def refresh_profile_from_sync_server() -> dict:
 
 
 def login_sync_server(server_url: str, username: str, password: str) -> dict:
-    clean_url = _https_server_url(server_url)
+    clean_url = _normalized_server_url(server_url)
     _reset_sync_session({"server_url": clean_url})
     body = json.dumps({"username": username, "password": password}).encode("utf-8")
     req = urlrequest.Request(
@@ -1160,7 +1202,7 @@ def login_sync_server(server_url: str, username: str, password: str) -> dict:
 
 
 def register_sync_server(server_url: str, username: str, password: str) -> dict:
-    clean_url = _https_server_url(server_url)
+    clean_url = _normalized_server_url(server_url)
     _reset_sync_session({"server_url": clean_url})
     body = json.dumps({"username": username, "password": password}).encode("utf-8")
     req = urlrequest.Request(
@@ -1190,7 +1232,7 @@ def logout_sync_server() -> dict:
     if server_url and token:
         try:
             req = urlrequest.Request(
-                f"{_https_server_url(server_url)}/auth/logout",
+                f"{_normalized_server_url(server_url)}/auth/logout",
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
                 method="POST",
             )
@@ -1323,7 +1365,7 @@ def _set_conflict_resolution_map(resolved: dict[str, str]) -> None:
 
 def run_sync_once(direction: str = "push_pull") -> dict:
     config = get_sync_config()
-    server_url = _https_server_url(config.get("server_url", ""))
+    server_url = _normalized_server_url(config.get("server_url", ""))
     token = str(config.get("access_token", "") or "")
     if not server_url or not token:
         raise ValueError("请先登录同步服务器。")
@@ -1572,7 +1614,7 @@ def resolve_sync_conflict(item_type: str, item_uuid: str, strategy: str) -> dict
 
 def _authed_request(path: str, payload: dict | None = None, method: str = "GET") -> dict:
     config = get_sync_config()
-    server_url = _https_server_url(config.get("server_url", ""))
+    server_url = _normalized_server_url(config.get("server_url", ""))
     token = str(config.get("access_token", "") or "")
     if not server_url or not token:
         raise ValueError("请先登录同步服务器。")
@@ -1620,6 +1662,13 @@ def share_sentence_to_partner(sentence_id: int, recipient_username: str = "", co
     sentence = get_sentence(sentence_id)
     if not sentence:
         raise ValueError("句子不存在。")
+    screenshot_base64 = ""
+    screenshot_path = sentence.get("screenshot_path")
+    if screenshot_path:
+        try:
+            screenshot_base64 = base64.b64encode(Path(str(screenshot_path)).read_bytes()).decode("utf-8")
+        except Exception:
+            screenshot_base64 = ""
     state = get_partner_state()
     partner_username = str((state.get("partner") or {}).get("username") or "").strip()
     recipient = recipient_username.strip() or partner_username
@@ -1631,9 +1680,66 @@ def share_sentence_to_partner(sentence_id: int, recipient_username: str = "", co
             "recipient_username": recipient,
             "sentence": sentence,
             "comment": comment,
+            "screenshot_base64": screenshot_base64,
         },
         method="POST",
     )
+
+
+def get_recent_share_comments() -> list[dict]:
+    try:
+        return list((_authed_request("/shares/recent-comments") or {}).get("items") or [])
+    except Exception:
+        return []
+
+
+def reply_share_message(share_id: int, comment: str) -> dict:
+    text = str(comment or "").strip()
+    if not text:
+        raise ValueError("回复内容不能为空。")
+    return _authed_request(f"/shares/{int(share_id)}/reply", {"comment": text}, method="POST")
+
+
+def _authed_request_bytes(path: str, timeout: int = 20) -> bytes:
+    config = get_sync_config()
+    server_url = _normalized_server_url(config.get("server_url", ""))
+    token = str(config.get("access_token", "") or "")
+    if not server_url or not token:
+        raise ValueError("请先登录同步服务器。")
+    req = urlrequest.Request(
+        f"{server_url}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    with _urlopen_no_proxy(req, timeout=timeout) as res:
+        return res.read()
+
+
+def fetch_share_screenshot_bytes(share_id: int) -> bytes:
+    return _authed_request_bytes(f"/shares/{int(share_id)}/screenshot", timeout=25)
+
+
+def collect_shared_sentence(share: dict) -> dict:
+    sentence = dict((share or {}).get("sentence") or {})
+    if not sentence:
+        raise ValueError("分享里没有句子内容。")
+    screenshot_base64 = ""
+    if bool((share or {}).get("has_screenshot")):
+        try:
+            screenshot_base64 = base64.b64encode(fetch_share_screenshot_bytes(int(share.get("id") or 0))).decode("utf-8")
+        except Exception:
+            screenshot_base64 = ""
+    sentence_id = add_sentence(
+        {
+            "example_ja": str(sentence.get("example_ja") or ""),
+            "example_zh": str(sentence.get("example_zh") or ""),
+            "tags": sentence.get("tags") or [],
+            "source": str(sentence.get("source") or "manual"),
+            "screenshot_base64": screenshot_base64,
+            "playback": sentence.get("playback") if isinstance(sentence.get("playback"), dict) else None,
+        }
+    )
+    return {"ok": True, "sentence_id": int(sentence_id)}
 
 
 def schedule_sync(direction: str = "push_pull"):

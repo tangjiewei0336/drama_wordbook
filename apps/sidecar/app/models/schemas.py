@@ -193,6 +193,7 @@ class Profile(BaseModel):
     nickname: str = "Drama Learner"
     avatar_data_url: str = ""
     theme_color: str = "#2e8f76"
+    signature: str = ""
 
 
 class SyncConfig(BaseModel):
@@ -206,6 +207,16 @@ class SyncConfig(BaseModel):
 
 class SyncConfigUpdateRequest(BaseModel):
     auto_sync_interval_minutes: int = 0
+
+
+class DesktopSettings(BaseModel):
+    notification_window_start: str = "18:00"
+    notification_window_end: str = "24:00"
+
+
+class DesktopSettingsUpdateRequest(BaseModel):
+    notification_window_start: str | None = None
+    notification_window_end: str | None = None
 
 
 class SyncLoginRequest(BaseModel):

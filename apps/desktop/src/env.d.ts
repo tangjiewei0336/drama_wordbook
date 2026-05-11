@@ -22,6 +22,8 @@ interface Window {
       message: string;
     }>>;
     clearSidecarLogs: () => Promise<unknown>;
+    getLaunchAtLogin?: () => Promise<boolean>;
+    setLaunchAtLogin?: (enabled: boolean) => Promise<boolean>;
     onSidecarStatus: (
       callback: (status: {
         state: string;
