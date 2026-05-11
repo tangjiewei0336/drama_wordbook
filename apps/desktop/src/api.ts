@@ -1,9 +1,11 @@
 export type VocabItem = {
   id: number;
+  uuid?: string;
   head_id: number;
   surface: string;
   dictionary_form: string;
   reading: string;
+  accent: number | null;
   jlpt_level: string;
   source: "manual" | "auto" | string;
   meanings: string[];
@@ -20,6 +22,8 @@ export type VocabItem = {
     series_name: string;
     episode_name: string;
   } | null;
+  sentence_id: number | null;
+  tags: string[];
   created_at: string;
 };
 
@@ -27,6 +31,7 @@ export type JaToken = {
   surface: string;
   dictionary_form: string;
   reading: string;
+  accent: number | null;
   pos: string;
   jlpt_level: string;
   meanings: string[];
@@ -36,6 +41,7 @@ export type DictLookupResult = {
   lemma: string;
   reading: string;
   meanings: string[];
+  jlpt_level?: string;
 };
 
 export type HealthStatus = {
@@ -87,14 +93,98 @@ export type PlayerNode = {
   items: VocabItem[];
 };
 
+export type SentenceRecord = {
+  id: number;
+  uuid?: string;
+  example_ja: string;
+  example_zh: string;
+  tags: string[];
+  source: "manual" | "auto" | string;
+  screenshot_path: string | null;
+  playback: VocabItem["playback"];
+  word_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Profile = {
+  nickname: string;
+  avatar_data_url: string;
+  theme_color: string;
+};
+
+export type SyncConfig = {
+  server_url: string;
+  access_token: string;
+  username: string;
+  last_sync_at: string;
+  last_server_version?: number;
+  auto_sync_interval_minutes?: number;
+};
+
+export type SyncConflict = {
+  type: "profile" | "sentences" | "vocab_items" | string;
+  uuid: string;
+  local_change?: string;
+  remote_change?: string;
+  local_value?: Record<string, unknown>;
+  remote_value?: Record<string, unknown>;
+  resolved_strategy?: "keep_local" | "accept_remote" | "";
+};
+
+export type DramaSpace = {
+  profile: Profile;
+  activity: Array<{ day: string; sentence_count: number; word_count: number }>;
+  recent_series: PlayerNode[];
+  total_words: number;
+  partner: {
+    username: string;
+    profile: Partial<Profile>;
+    last_login_at: string;
+    recent_series?: PlayerNode[];
+    activity?: Array<{ day: string; sentence_count: number; word_count: number }>;
+  } | null;
+  can_send_partner_request: boolean;
+  partner_inbound_requests: Array<{
+    id: number;
+    created_at: string;
+    from_username: string;
+    from_profile: Partial<Profile>;
+  }>;
+  partner_outbound_requests: Array<{
+    id: number;
+    created_at: string;
+    to_username: string;
+  }>;
+  unread_shares: Array<{
+    id: number;
+    sentence: SentenceRecord;
+    comment: string;
+    created_at: string;
+    sender_username: string;
+    sender_profile: Partial<Profile>;
+  }>;
+};
+
 export const SIDECAR_BASE = "http://127.0.0.1:17321";
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${SIDECAR_BASE}${path}`);
   if (!res.ok) {
-    throw new Error(`Request failed: ${res.status}`);
+    throw new Error(await parseApiError(res, `Request failed: ${res.status}`));
   }
   return (await res.json()) as T;
+}
+
+async function parseApiError(res: Response, fallback: string): Promise<string> {
+  const text = (await res.text()).trim();
+  if (!text) return fallback;
+  try {
+    const data = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+    return String(data.detail || data.message || data.error || fallback);
+  } catch {
+    return text || fallback;
+  }
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {
@@ -108,7 +198,7 @@ export async function fetchAsrStatus(): Promise<AsrModelStatus> {
 export async function startAsrModelLoad(): Promise<AsrModelStatus> {
   const res = await fetch(`${SIDECAR_BASE}/asr/model/load`, { method: "POST" });
   if (!res.ok) {
-    throw new Error(`Model load failed: ${res.status}`);
+    throw new Error(await parseApiError(res, `Model load failed: ${res.status}`));
   }
   return (await res.json()) as AsrModelStatus;
 }
@@ -118,8 +208,142 @@ export async function fetchByPlayer(): Promise<PlayerNode[]> {
 }
 
 export async function fetchByTime(): Promise<VocabItem[]> {
-  const data = await getJson<{ items: VocabItem[] }>("/vocab/view/by-time");
+  const data = await getJson<{ items: VocabItem[] }>("/vocab/view/by-time?limit=200&offset=0");
   return data.items || [];
+}
+
+export async function fetchSentences(limit = 200, offset = 0): Promise<{ items: SentenceRecord[]; total: number }> {
+  return getJson<{ items: SentenceRecord[]; total: number }>(`/sentences?limit=${limit}&offset=${offset}`);
+}
+
+export async function updateSentence(sentenceId: number, exampleJa: string, exampleZh: string, tags: string[]): Promise<SentenceRecord> {
+  const res = await fetch(`${SIDECAR_BASE}/sentences/${sentenceId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ example_ja: exampleJa, example_zh: exampleZh, tags }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `Sentence update failed: ${res.status}`));
+  return (await res.json()) as SentenceRecord;
+}
+
+export async function deleteSentence(sentenceId: number): Promise<{ ok: boolean; deleted_sentence_id: number; deleted_word_count: number }> {
+  const res = await fetch(`${SIDECAR_BASE}/sentences/${sentenceId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await parseApiError(res, `删除句子失败（${res.status}）`));
+  return (await res.json()) as { ok: boolean; deleted_sentence_id: number; deleted_word_count: number };
+}
+
+export async function fetchDramaSpace(): Promise<DramaSpace> {
+  return getJson<DramaSpace>("/space");
+}
+
+export async function fetchProfile(): Promise<Profile> {
+  return getJson<Profile>("/profile");
+}
+
+export async function saveProfile(profile: Profile): Promise<Profile> {
+  const res = await fetch(`${SIDECAR_BASE}/profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `Profile save failed: ${res.status}`));
+  return (await res.json()) as Profile;
+}
+
+export async function fetchSyncConfig(): Promise<SyncConfig> {
+  return getJson<SyncConfig>("/sync/config");
+}
+
+export async function updateSyncConfig(config: Pick<SyncConfig, "auto_sync_interval_minutes">): Promise<SyncConfig> {
+  const res = await fetch(`${SIDECAR_BASE}/sync/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `更新同步设置失败（${res.status}）`));
+  return (await res.json()) as SyncConfig;
+}
+
+export async function loginSync(serverUrl: string, username: string, password: string): Promise<SyncConfig> {
+  const res = await fetch(`${SIDECAR_BASE}/sync/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ server_url: serverUrl, username, password }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `登录失败（${res.status}）`));
+  return (await res.json()) as SyncConfig;
+}
+
+export async function registerSync(serverUrl: string, username: string, password: string): Promise<SyncConfig> {
+  const res = await fetch(`${SIDECAR_BASE}/sync/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ server_url: serverUrl, username, password }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `注册失败（${res.status}）`));
+  return (await res.json()) as SyncConfig;
+}
+
+export async function logoutSync(): Promise<SyncConfig> {
+  const res = await fetch(`${SIDECAR_BASE}/sync/logout`, { method: "POST" });
+  if (!res.ok) throw new Error(await parseApiError(res, `退出登录失败（${res.status}）`));
+  return (await res.json()) as SyncConfig;
+}
+
+export async function runSync(): Promise<{ ok?: boolean; state?: string; synced_at?: string; message?: string; conflicts?: SyncConflict[] }> {
+  const res = await fetch(`${SIDECAR_BASE}/sync/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ direction: "push_pull" }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `同步失败（${res.status}）`));
+  return (await res.json()) as { ok?: boolean; state?: string; synced_at?: string; message?: string; conflicts?: SyncConflict[] };
+}
+
+export async function pullSync(): Promise<{ ok?: boolean; state?: string; latest_version?: number; message?: string; conflicts?: SyncConflict[] }> {
+  const res = await fetch(`${SIDECAR_BASE}/sync/pull`, { method: "POST" });
+  if (!res.ok) throw new Error(await parseApiError(res, `下载云端更新失败（${res.status}）`));
+  return (await res.json()) as { ok?: boolean; state?: string; latest_version?: number; message?: string; conflicts?: SyncConflict[] };
+}
+
+export async function fetchSyncConflicts(): Promise<{ items: SyncConflict[]; at?: string }> {
+  return getJson<{ items: SyncConflict[]; at?: string }>("/sync/conflicts");
+}
+
+export async function resolveSyncConflict(type: string, uuid: string, strategy: "keep_local" | "accept_remote"): Promise<{ items: SyncConflict[]; at?: string }> {
+  const res = await fetch(`${SIDECAR_BASE}/sync/conflicts/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, uuid, strategy }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `处理不一致项失败（${res.status}）`));
+  return (await res.json()) as { items: SyncConflict[]; at?: string };
+}
+
+export async function shareSentence(sentenceId: number, recipientUsername: string, comment: string): Promise<{ ok: boolean; id?: number }> {
+  const res = await fetch(`${SIDECAR_BASE}/shares`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sentence_id: sentenceId, recipient_username: recipientUsername, comment }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `分享失败（${res.status}）`));
+  return (await res.json()) as { ok: boolean; id?: number };
+}
+
+export async function createPartnerRequest(partnerUsername: string): Promise<{ ok: boolean; id?: number; status?: string }> {
+  const res = await fetch(`${SIDECAR_BASE}/partner/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ partner_username: partnerUsername }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `发送申请失败（${res.status}）`));
+  return (await res.json()) as { ok: boolean; id?: number; status?: string };
+}
+
+export async function acceptPartnerRequest(requestId: number): Promise<{ ok: boolean }> {
+  const res = await fetch(`${SIDECAR_BASE}/partner/requests/${requestId}/accept`, { method: "POST" });
+  if (!res.ok) throw new Error(await parseApiError(res, `接受申请失败（${res.status}）`));
+  return (await res.json()) as { ok: boolean };
 }
 
 export async function fetchHeadItems(headId: number): Promise<VocabItem[]> {
@@ -131,7 +355,7 @@ export async function deleteVocabItem(itemId: number): Promise<void> {
     method: "DELETE",
   });
   if (!res.ok) {
-    throw new Error(`Delete failed: ${res.status}`);
+    throw new Error(await parseApiError(res, `删除失败（${res.status}）`));
   }
 }
 
@@ -142,7 +366,7 @@ export async function updateVocabItemText(itemId: number, exampleJa: string, exa
     body: JSON.stringify({ example_ja: exampleJa, example_zh: exampleZh }),
   });
   if (!res.ok) {
-    throw new Error(`Update failed: ${res.status}`);
+    throw new Error(await parseApiError(res, `更新失败（${res.status}）`));
   }
   return (await res.json()) as VocabItem;
 }
@@ -154,20 +378,25 @@ export async function tokenizeJapanese(text: string): Promise<JaToken[]> {
     body: JSON.stringify({ text }),
   });
   if (!res.ok) {
-    throw new Error(`Tokenize failed: ${res.status}`);
+    throw new Error(await parseApiError(res, `分析失败（${res.status}）`));
   }
   const data = (await res.json()) as { tokens?: JaToken[] };
   return data.tokens || [];
 }
 
 export async function lookupDictionary(lemma: string): Promise<DictLookupResult> {
-  const res = await fetch(`${SIDECAR_BASE}/dict/lookup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lemma }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${SIDECAR_BASE}/dict/lookup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lemma }),
+    });
+  } catch (err) {
+    throw new Error(`词典查询失败：无法连接 Sidecar 或网络不可用。${String((err as Error).message || err)}`);
+  }
   if (!res.ok) {
-    throw new Error(`Dictionary lookup failed: ${res.status}`);
+    throw new Error(await parseApiError(res, `词典查询失败（${res.status}）`));
   }
   return (await res.json()) as DictLookupResult;
 }
@@ -183,7 +412,7 @@ export async function deletePlayerGroup(node: PlayerNode): Promise<number> {
     method: "DELETE",
   });
   if (!res.ok) {
-    throw new Error(`Delete group failed: ${res.status}`);
+    throw new Error(await parseApiError(res, `删除整集失败（${res.status}）`));
   }
   const data = (await res.json()) as { deleted_count?: number };
   return Number(data.deleted_count || 0);
@@ -191,4 +420,8 @@ export async function deletePlayerGroup(node: PlayerNode): Promise<number> {
 
 export function screenshotUrl(itemId: number): string {
   return `${SIDECAR_BASE}/vocab/items/${itemId}/screenshot`;
+}
+
+export function sentenceScreenshotUrl(sentenceId: number): string {
+  return `${SIDECAR_BASE}/sentences/${sentenceId}/screenshot`;
 }

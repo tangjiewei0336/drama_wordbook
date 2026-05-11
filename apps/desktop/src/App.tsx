@@ -3,54 +3,104 @@ import {
   CalendarClock,
   ChevronDown,
   Clapperboard,
+  Cloud,
   Cpu,
   Download,
   ExternalLink,
+  LogIn,
+  Palette,
   RefreshCw,
   Search,
   Server,
+  Settings,
   Sparkles,
   Save,
   MessageSquareText,
   Pencil,
+  Send,
+  User,
+  Users,
+  Volume2,
   Terminal,
   Trash2,
   X,
 } from "lucide-react";
+import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAsrStatus,
   deletePlayerGroup,
   deleteVocabItem,
+  deleteSentence,
   fetchByPlayer,
   fetchByTime,
+  createPartnerRequest,
+  fetchDramaSpace,
+  fetchSyncConflicts,
   fetchHeadItems,
   fetchHealth,
+  fetchProfile,
+  fetchSentences,
+  fetchSyncConfig,
+  acceptPartnerRequest,
+  loginSync,
+  logoutSync,
+  pullSync,
+  resolveSyncConflict,
+  registerSync,
   lookupDictionary,
+  runSync,
+  saveProfile,
+  sentenceScreenshotUrl,
+  shareSentence,
   screenshotUrl,
   SIDECAR_BASE,
   startAsrModelLoad,
   tokenizeJapanese,
-  updateVocabItemText,
+  updateSentence,
+  updateSyncConfig,
   type AsrModelStatus,
   type DictLookupResult,
   type HealthStatus,
   type JaToken,
   type PlayerNode,
+  type Profile,
+  type DramaSpace,
+  type SentenceRecord,
   type SidecarProcessStatus,
+  type SyncConfig,
+  type SyncConflict,
   type VocabItem,
 } from "./api";
 import "./styles.css";
+import avatar01Thumb from "./assets/avatars/100/avatar-01.jpg";
+import avatar02Thumb from "./assets/avatars/100/avatar-02.jpg";
+import avatar03Thumb from "./assets/avatars/100/avatar-03.jpg";
+import avatar04Thumb from "./assets/avatars/100/avatar-04.jpg";
+import avatar05Thumb from "./assets/avatars/100/avatar-05.jpg";
+import avatar06Thumb from "./assets/avatars/100/avatar-06.jpg";
+import avatar01Full from "./assets/avatars/500/avatar-01.jpg";
+import avatar02Full from "./assets/avatars/500/avatar-02.jpg";
+import avatar03Full from "./assets/avatars/500/avatar-03.jpg";
+import avatar04Full from "./assets/avatars/500/avatar-04.jpg";
+import avatar05Full from "./assets/avatars/500/avatar-05.jpg";
+import avatar06Full from "./assets/avatars/500/avatar-06.jpg";
 
 type ViewMode = "byPlayer" | "byTime";
-type MainMode = ViewMode | "sentences" | "runtime";
+type MainMode = ViewMode | "sentences" | "space" | "profile" | "runtime";
 type SelectedSource = Pick<PlayerNode, "platform" | "source" | "series_name" | "episode_name" | "items"> | null;
 type LogEntry = { id: string; at: string; level: string; source: string; message: string };
 type SentenceGroup = {
   key: string;
   text: string;
   zh: string;
-  items: VocabItem[];
+  items: SentenceRecord[];
+};
+type PresetAvatar = {
+  id: string;
+  originalName: string;
+  thumbUrl: string;
+  fullUrl: string;
 };
 
 function formatDate(iso: string): string {
@@ -112,6 +162,44 @@ function normalizeSentenceText(item: VocabItem): string {
   return (item.example_ja || item.surface || "").trim();
 }
 
+const CIRCLED_NUMBERS = ["⓪", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
+const THEME_COLORS = ["#2e8f76", "#d65f4a", "#4f7cff", "#a85539", "#7c3aed", "#0f766e"];
+const PRESET_AVATARS: PresetAvatar[] = [
+  { id: "avatar-01", originalName: "你不要过来啊", thumbUrl: avatar01Thumb, fullUrl: avatar01Full },
+  { id: "avatar-02", originalName: "高兴的小男孩", thumbUrl: avatar02Thumb, fullUrl: avatar02Full },
+  { id: "avatar-03", originalName: "可爱的小女孩", thumbUrl: avatar03Thumb, fullUrl: avatar03Full },
+  { id: "avatar-04", originalName: "メロメロ", thumbUrl: avatar04Thumb, fullUrl: avatar04Full },
+  { id: "avatar-05", originalName: "我们天下第一最最好", thumbUrl: avatar05Thumb, fullUrl: avatar05Full },
+  { id: "avatar-06", originalName: "我要过来啦", thumbUrl: avatar06Thumb, fullUrl: avatar06Full },
+];
+
+function accentMark(accent?: number | null): string {
+  if (accent === null || accent === undefined) return "";
+  return CIRCLED_NUMBERS[accent] || `(${accent})`;
+}
+
+function speakJapanese(text = "") {
+  const value = text.trim();
+  if (!value || !("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(value);
+  utterance.lang = "ja-JP";
+  utterance.rate = 0.92;
+  window.speechSynthesis.speak(utterance);
+}
+
+async function imageUrlToDataUrl(url: string): Promise<string> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Avatar fetch failed: ${res.status}`);
+  const blob = await res.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Avatar convert failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function openExternal(url: string) {
   if (window.wordbookDesktop?.openExternal) {
     await window.wordbookDesktop.openExternal(url);
@@ -124,11 +212,22 @@ export default function App() {
   const [view, setView] = useState<MainMode>("byPlayer");
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const wasHealthyRef = useRef(false);
+  const autoSyncRunningRef = useRef(false);
   const [sidecarStatus, setSidecarStatus] = useState<SidecarProcessStatus | null>(null);
   const [asrStatus, setAsrStatus] = useState<AsrModelStatus | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [playerNodes, setPlayerNodes] = useState<PlayerNode[]>([]);
   const [timeItems, setTimeItems] = useState<VocabItem[]>([]);
+  const [sentences, setSentences] = useState<SentenceRecord[]>([]);
+  const [sentenceTotal, setSentenceTotal] = useState(0);
+  const [space, setSpace] = useState<DramaSpace | null>(null);
+  const [profile, setProfile] = useState<Profile>({
+    nickname: "Drama Learner",
+    avatar_data_url: "",
+    theme_color: "#2e8f76",
+  });
+  const [syncConfig, setSyncConfig] = useState<SyncConfig>({ server_url: "", access_token: "", username: "", last_sync_at: "", last_server_version: 0, auto_sync_interval_minutes: 0 });
+  const [loginForm, setLoginForm] = useState({ serverUrl: "", username: "", password: "" });
   const [selectedItems, setSelectedItems] = useState<VocabItem[]>([]);
   const [selectedHeadId, setSelectedHeadId] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<SelectedSource>(null);
@@ -141,11 +240,22 @@ export default function App() {
   const [selectedTokenLookup, setSelectedTokenLookup] = useState<DictLookupResult | null>(null);
   const [sentenceBusy, setSentenceBusy] = useState(false);
   const [editingSentence, setEditingSentence] = useState(false);
+  const [sharingSentence, setSharingSentence] = useState(false);
+  const [shareComment, setShareComment] = useState("");
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [search, setSearch] = useState("");
+  const [avatarSelectingId, setAvatarSelectingId] = useState("");
+  const [selectedPresetAvatarId, setSelectedPresetAvatarId] = useState("");
+  const [partnerRequestName, setPartnerRequestName] = useState("");
+  const [partnerBusy, setPartnerBusy] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
+  const [resolvingConflictKey, setResolvingConflictKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const isSidecarOnline = Boolean(sidecarStatus?.healthy || health);
+  const appStyle = { "--theme-color": profile.theme_color, "--partner-color": "#d65f4a" } as CSSProperties;
   const serviceText = sidecarStatus
     ? sidecarStatus.healthy
       ? sidecarStatus.managed
@@ -157,16 +267,31 @@ export default function App() {
     : health
       ? "Sidecar 在线"
       : "Sidecar 检测中";
+  const isProfileLocked = !syncConfig.access_token;
 
   async function loadAll(keepSelection = true) {
     setLoading(true);
     setError("");
     try {
-      const [healthRes, nodes, timeList] = await Promise.all([fetchHealth(), fetchByPlayer(), fetchByTime()]);
+      const [healthRes, nodes, timeList, sentenceList, profileRes, syncRes, spaceRes] = await Promise.all([
+        fetchHealth(),
+        fetchByPlayer(),
+        fetchByTime(),
+        fetchSentences(),
+        fetchProfile(),
+        fetchSyncConfig(),
+        fetchDramaSpace(),
+      ]);
       setHealth(healthRes);
       if (healthRes.asr) setAsrStatus(healthRes.asr);
       setPlayerNodes(nodes);
       setTimeItems(timeList);
+      setSentences(sentenceList.items || []);
+      setSentenceTotal(sentenceList.total || 0);
+      setProfile(profileRes);
+      setSyncConfig(syncRes);
+      setLoginForm((current) => ({ ...current, serverUrl: syncRes.server_url || current.serverUrl, username: syncRes.username || current.username }));
+      setSpace(spaceRes);
 
       if (keepSelection && selectedHeadId) {
         setSelectedItems(await fetchHeadItems(selectedHeadId));
@@ -223,6 +348,37 @@ export default function App() {
   }, [view, isSidecarOnline]);
 
   useEffect(() => {
+    if (view !== "profile") return;
+    refreshSyncConflicts();
+  }, [view, syncConfig.access_token]);
+
+  useEffect(() => {
+    const intervalMinutes = Number(syncConfig.auto_sync_interval_minutes || 0);
+    if (!syncConfig.access_token || intervalMinutes <= 0) return;
+    const timer = window.setInterval(async () => {
+      if (autoSyncRunningRef.current) return;
+      autoSyncRunningRef.current = true;
+      try {
+        const result = await runSync();
+        if (result.state === "needs_pull") {
+          const conflictsRes = await fetchSyncConflicts().catch(() => ({ items: [] as SyncConflict[] }));
+          setSyncConflicts(conflictsRes.items || []);
+          setError(result.message || "云端有新变化，请先下载云端更新");
+          return;
+        }
+        setSyncConfig(await fetchSyncConfig());
+        setSyncConflicts([]);
+        setSpace(await fetchDramaSpace());
+      } catch (err) {
+        setError(`自动同步失败：${String((err as Error).message || err)}`);
+      } finally {
+        autoSyncRunningRef.current = false;
+      }
+    }, intervalMinutes * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [syncConfig.access_token, syncConfig.auto_sync_interval_minutes]);
+
+  useEffect(() => {
     if (!selectedSource?.items.length) return;
     const timer = window.setInterval(() => {
       setCarouselIndex((value) => value + 1);
@@ -258,8 +414,8 @@ export default function App() {
   );
   const carouselItem = carouselItems.length ? carouselItems[carouselIndex % carouselItems.length] : null;
   const selectedSentence = useMemo(
-    () => timeItems.find((item) => item.id === selectedSentenceId) || null,
-    [timeItems, selectedSentenceId]
+    () => sentences.find((item) => item.id === selectedSentenceId) || null,
+    [sentences, selectedSentenceId]
   );
   const knownWordKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -282,8 +438,18 @@ export default function App() {
   );
   const sentenceGroups = useMemo<SentenceGroup[]>(() => {
     const groups = new Map<string, SentenceGroup>();
-    filteredTimeItems.forEach((item) => {
-      const text = normalizeSentenceText(item);
+    const q = search.trim().toLowerCase();
+    sentences
+      .filter((item) =>
+        !q
+          ? true
+          : [item.example_ja, item.example_zh, item.tags.join(" "), item.playback?.title]
+              .join(" ")
+              .toLowerCase()
+              .includes(q)
+      )
+      .forEach((item) => {
+      const text = item.example_ja.trim();
       if (!text) return;
       const source = item.playback?.url || item.playback?.title || "";
       const key = `${text}::${source}`;
@@ -305,7 +471,7 @@ export default function App() {
       const bTime = Math.max(...b.items.map((item) => new Date(item.created_at).getTime()));
       return bTime - aTime;
     });
-  }, [filteredTimeItems]);
+  }, [sentences, search]);
 
   async function onSelectHead(headId: number) {
     setLoading(true);
@@ -425,15 +591,15 @@ export default function App() {
     }
   }
 
-  async function onSelectSentence(item: VocabItem, groupKey = "") {
+  async function onSelectSentence(item: SentenceRecord, groupKey = "") {
     setSelectedSentenceId(item.id);
     setSelectedSentenceKey(groupKey);
-    setSentenceJa(item.example_ja || item.surface);
+    setSentenceJa(item.example_ja || "");
     setSentenceZh(item.example_zh || "");
     setEditingSentence(false);
     setSelectedHeadId(null);
     setSelectedSource(null);
-    await analyzeSentence(item.example_ja || item.surface);
+    await analyzeSentence(item.example_ja || "");
   }
 
   async function onSaveSentenceText() {
@@ -441,8 +607,8 @@ export default function App() {
     setSentenceBusy(true);
     setError("");
     try {
-      const updated = await updateVocabItemText(selectedSentence.id, sentenceJa, sentenceZh);
-      setTimeItems((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      const updated = await updateSentence(selectedSentence.id, sentenceJa, sentenceZh, selectedSentence.tags || []);
+      setSentences((items) => items.map((item) => (item.id === updated.id ? updated : item)));
       setPlayerNodes(await fetchByPlayer());
       if (selectedSentenceKey) {
         const group = sentenceGroups.find((entry) => entry.key === selectedSentenceKey);
@@ -450,15 +616,44 @@ export default function App() {
           await Promise.all(
             group.items
               .filter((item) => item.id !== selectedSentence.id)
-              .map((item) => updateVocabItemText(item.id, sentenceJa, sentenceZh).catch(() => null))
+              .map((item) => updateSentence(item.id, sentenceJa, sentenceZh, item.tags || []).catch(() => null))
           );
-          const [nodes, timeList] = await Promise.all([fetchByPlayer(), fetchByTime()]);
+          const [nodes, timeList, sentenceList] = await Promise.all([fetchByPlayer(), fetchByTime(), fetchSentences()]);
           setPlayerNodes(nodes);
           setTimeItems(timeList);
+          setSentences(sentenceList.items || []);
         }
       }
       setEditingSentence(false);
       await analyzeSentence(sentenceJa);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setSentenceBusy(false);
+    }
+  }
+
+  async function onDeleteSentence() {
+    if (!selectedSentence) return;
+    const wordCount = Number(selectedSentence.word_count || 0);
+    const suffix = wordCount ? `\n\n同时会删除和这句绑定的 ${wordCount} 个单词。` : "";
+    if (!window.confirm(`删除这句？\n${selectedSentence.example_ja || sentenceJa}${suffix}`)) return;
+    setSentenceBusy(true);
+    setError("");
+    try {
+      await deleteSentence(selectedSentence.id);
+      setSelectedSentenceId(null);
+      setSelectedSentenceKey("");
+      setSentenceJa("");
+      setSentenceZh("");
+      setSentenceTokens([]);
+      setSelectedTokenLookup(null);
+      const [nodes, timeList, sentenceList, spaceRes] = await Promise.all([fetchByPlayer(), fetchByTime(), fetchSentences(), fetchDramaSpace()]);
+      setPlayerNodes(nodes);
+      setTimeItems(timeList);
+      setSentences(sentenceList.items || []);
+      setSentenceTotal(sentenceList.total || 0);
+      setSpace(spaceRes);
     } catch (err) {
       setError(String((err as Error).message || err));
     } finally {
@@ -472,7 +667,28 @@ export default function App() {
     setSentenceBusy(true);
     setError("");
     try {
-      setSelectedTokenLookup(await lookupDictionary(lemma));
+      const result = await lookupDictionary(lemma);
+      setSelectedTokenLookup(result);
+      if (!result.meanings?.length) {
+        setError(`未查到「${lemma}」的释义。可能是词形未收录，或当前网络无法访问外部词典。`);
+      }
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setSentenceBusy(false);
+    }
+  }
+
+  async function onShareSentence() {
+    if (!selectedSentence) return;
+    const partner = (space?.partner?.username || "").trim();
+    if (!partner) return;
+    setSentenceBusy(true);
+    setError("");
+    try {
+      await shareSentence(selectedSentence.id, partner, shareComment);
+      setShareComment("");
+      setSharingSentence(false);
     } catch (err) {
       setError(String((err as Error).message || err));
     } finally {
@@ -535,7 +751,7 @@ export default function App() {
       <section className="sentence-panel">
         <div className="sentence-shot">
           {selectedSentence.screenshot_path ? (
-            <img src={screenshotUrl(selectedSentence.id)} alt={`${selectedSentence.surface} screenshot`} />
+            <img src={sentenceScreenshotUrl(selectedSentence.id)} alt="sentence screenshot" />
           ) : (
             <div className="empty centered">这句还没有剧照。</div>
           )}
@@ -548,9 +764,20 @@ export default function App() {
                 <span>词性标注</span>
               </div>
               <div className="sentence-actions">
+                <button className="icon-button" onClick={() => speakJapanese(sentenceJa)} title="朗读句子">
+                  <Volume2 size={15} />
+                </button>
                 <button className="icon-button" onClick={() => setEditingSentence(true)} title="编辑句子">
                   <Pencil size={15} />
                 </button>
+                <button className="icon-button" onClick={onDeleteSentence} disabled={sentenceBusy} title="删除句子">
+                  <Trash2 size={15} />
+                </button>
+                {space?.partner?.username ? (
+                  <button className="icon-button" onClick={() => setSharingSentence(true)} title="分享给搭子">
+                    <Send size={15} />
+                  </button>
+                ) : null}
                 <button className="runtime-action compact" onClick={() => analyzeSentence()} disabled={sentenceBusy}>
                   <Sparkles size={15} />
                   <span>分析词性</span>
@@ -578,7 +805,7 @@ export default function App() {
                   ) : (
                     <strong>{token.surface}</strong>
                   )}
-                  <em>{[token.pos, token.jlpt_level].filter(Boolean).join(" · ")}</em>
+                  <em>{[token.reading && !hasKanji(token.surface) ? toHiragana(token.reading) : "", accentMark(token.accent), token.pos, token.jlpt_level].filter(Boolean).join(" · ")}</em>
                 </span>
               )) : <div className="empty">点击“分析词性”生成标注。</div>}
             </div>
@@ -621,6 +848,41 @@ export default function App() {
                   <button className="runtime-action compact" onClick={onSaveSentenceText} disabled={sentenceBusy}>
                     <Save size={15} />
                     <span>保存文本</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {sharingSentence ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="sentence-edit-modal">
+              <div className="modal-header">
+                <div className="section-title">
+                  <Send size={17} />
+                  <span>分享给搭子</span>
+                </div>
+                <button className="icon-button" onClick={() => setSharingSentence(false)} title="关闭">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="sentence-editor">
+                <div className="share-preview">
+                  <strong>{sentenceJa}</strong>
+                  {sentenceZh ? <span>{sentenceZh}</span> : null}
+                </div>
+                <label>
+                  <span>评论</span>
+                  <textarea
+                    value={shareComment}
+                    placeholder="写一句想对搭子说的话"
+                    onChange={(event) => setShareComment(event.target.value)}
+                  />
+                </label>
+                <div className="sentence-actions">
+                  <button className="runtime-action compact" onClick={onShareSentence} disabled={sentenceBusy}>
+                    <Send size={15} />
+                    <span>发送</span>
                   </button>
                 </div>
               </div>
@@ -808,8 +1070,707 @@ export default function App() {
     );
   }
 
+  async function onSaveProfile() {
+    if (isProfileLocked) {
+      setError("请先登录云同步账号后再编辑个人信息。");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      setProfile(await saveProfile(profile));
+      setSpace(await fetchDramaSpace());
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onSelectPresetAvatar(avatar: PresetAvatar) {
+    if (isProfileLocked) {
+      setError("请先登录云同步账号后再编辑个人信息。");
+      return;
+    }
+    setAvatarSelectingId(avatar.id);
+    setError("");
+    try {
+      const dataUrl = await imageUrlToDataUrl(avatar.fullUrl);
+      setProfile((current) => ({ ...current, avatar_data_url: dataUrl }));
+      setSelectedPresetAvatarId(avatar.id);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setAvatarSelectingId("");
+    }
+  }
+
+  async function onLoginSync() {
+    setLoading(true);
+    setError("");
+    try {
+      setSyncConfig(await loginSync(loginForm.serverUrl, loginForm.username, loginForm.password));
+      const [profileRes, spaceRes] = await Promise.all([fetchProfile(), fetchDramaSpace()]);
+      setProfile(profileRes);
+      setShowLoginModal(false);
+      setSpace(spaceRes);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onRegisterSync() {
+    setLoading(true);
+    setError("");
+    try {
+      setSyncConfig(await registerSync(loginForm.serverUrl, loginForm.username, loginForm.password));
+      const [profileRes, spaceRes] = await Promise.all([fetchProfile(), fetchDramaSpace()]);
+      setProfile(profileRes);
+      setShowRegisterModal(false);
+      setSpace(spaceRes);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onLogoutSync() {
+    setLoading(true);
+    setError("");
+    try {
+      setSyncConfig(await logoutSync());
+      setProfile(await fetchProfile());
+      setSpace(await fetchDramaSpace());
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onUpdateAutoSyncInterval(intervalMinutes: number) {
+    setLoading(true);
+    setError("");
+    try {
+      setSyncConfig(await updateSyncConfig({ auto_sync_interval_minutes: intervalMinutes }));
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onCreatePartnerRequest() {
+    const target = partnerRequestName.trim();
+    if (!target || !space?.can_send_partner_request) return;
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await createPartnerRequest(target);
+      setPartnerRequestName("");
+      setSpace(await fetchDramaSpace());
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setPartnerBusy(false);
+    }
+  }
+
+  async function onAcceptPartnerRequest(requestId: number) {
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await acceptPartnerRequest(requestId);
+      setSpace(await fetchDramaSpace());
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setPartnerBusy(false);
+    }
+  }
+
+  async function onRunSync() {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await runSync();
+      if (result.state === "needs_pull") {
+        const conflictCount = Number((result.conflicts || []).length || 0);
+        const hint = conflictCount > 0 ? `，其中 ${conflictCount} 条需要你选择处理方式` : "";
+        setError((result.message || "云端有新变化，请先下载云端更新") + hint);
+        const conflictsRes = await fetchSyncConflicts().catch(() => ({ items: [] as SyncConflict[] }));
+        setSyncConflicts(conflictsRes.items || []);
+        return;
+      }
+      setSyncConfig(await fetchSyncConfig());
+      setSyncConflicts([]);
+      setSpace(await fetchDramaSpace());
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onPullSync() {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await pullSync();
+      if (result.state === "conflict") {
+        const conflictCount = Number((result.conflicts || []).length || 0);
+        setError((result.message || "发现内容冲突，请先选择处理方式") + (conflictCount ? `（${conflictCount} 条）` : ""));
+        const conflictsRes = await fetchSyncConflicts().catch(() => ({ items: [] as SyncConflict[] }));
+        setSyncConflicts(conflictsRes.items || []);
+        return;
+      }
+      setSyncConfig(await fetchSyncConfig());
+      setSyncConflicts([]);
+      setSpace(await fetchDramaSpace());
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshSyncConflicts() {
+    if (!syncConfig.access_token) {
+      setSyncConflicts([]);
+      return;
+    }
+    try {
+      const data = await fetchSyncConflicts();
+      setSyncConflicts(data.items || []);
+    } catch {
+      setSyncConflicts([]);
+    }
+  }
+
+  async function onResolveSyncConflict(conflict: SyncConflict, strategy: "keep_local" | "accept_remote") {
+    if (!conflict.type || !conflict.uuid) return;
+    const key = `${conflict.type}:${conflict.uuid}:${strategy}`;
+    setResolvingConflictKey(key);
+    setError("");
+    try {
+      const next = await resolveSyncConflict(conflict.type, conflict.uuid, strategy);
+      setSyncConflicts(next.items || []);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setResolvingConflictKey("");
+    }
+  }
+
+  async function onResolveAllSyncConflicts(strategy: "keep_local" | "accept_remote") {
+    const pending = syncConflicts.filter((item) => !item.resolved_strategy);
+    if (!pending.length) return;
+    setResolvingConflictKey(`all:${strategy}`);
+    setError("");
+    try {
+      let latest = { items: syncConflicts };
+      for (const item of pending) {
+        latest = await resolveSyncConflict(item.type, item.uuid, strategy);
+      }
+      setSyncConflicts(latest.items || []);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    } finally {
+      setResolvingConflictKey("");
+    }
+  }
+
+  function conflictTypeLabel(conflict: SyncConflict): string {
+    if (conflict.type === "profile") return "个人资料";
+    if (conflict.type === "sentences") return "句子";
+    if (conflict.type === "vocab_items") return "词条";
+    return "内容";
+  }
+
+  function conflictPreview(conflict: SyncConflict, source: "local" | "remote"): string {
+    const changeType = source === "local" ? conflict.local_change : conflict.remote_change;
+    const value = (source === "local" ? conflict.local_value : conflict.remote_value) || {};
+    if (changeType === "deleted") return "已删除";
+    if (conflict.type === "profile") {
+      const nickname = String(value.nickname || "").trim();
+      return nickname ? `昵称：${nickname}` : "个人信息有变化";
+    }
+    const ja = String(value.example_ja || "").trim();
+    const zh = String(value.example_zh || "").trim();
+    const surface = String(value.surface || value.dictionary_form || "").trim();
+    const text = ja || surface || zh || "内容有变化";
+    return text.length > 42 ? `${text.slice(0, 42)}...` : text;
+  }
+
+  function conflictFieldHints(conflict: SyncConflict): string {
+    const local = conflict.local_value || {};
+    const remote = conflict.remote_value || {};
+    const hints: string[] = [];
+
+    const addIfChanged = (label: string, l: unknown, r: unknown) => {
+      const lv = JSON.stringify(l ?? null);
+      const rv = JSON.stringify(r ?? null);
+      if (lv !== rv) hints.push(label);
+    };
+
+    if (conflict.type === "profile") {
+      addIfChanged("昵称", local.nickname, remote.nickname);
+      addIfChanged("主题色", local.theme_color, remote.theme_color);
+      addIfChanged("头像", local.avatar_data_url, remote.avatar_data_url);
+    } else if (conflict.type === "sentences") {
+      addIfChanged("日语句子", local.example_ja, remote.example_ja);
+      addIfChanged("中文句子", local.example_zh, remote.example_zh);
+      addIfChanged("标签", local.tags, remote.tags);
+    } else if (conflict.type === "vocab_items") {
+      addIfChanged("词面", local.surface, remote.surface);
+      addIfChanged("原形", local.dictionary_form, remote.dictionary_form);
+      addIfChanged("释义", local.meanings, remote.meanings);
+      addIfChanged("例句(日语)", local.example_ja, remote.example_ja);
+      addIfChanged("例句(中文)", local.example_zh, remote.example_zh);
+      addIfChanged("标签", local.tags, remote.tags);
+    }
+
+    if (!hints.length) return "多处内容有变化";
+    return `差异字段：${hints.join("、")}`;
+  }
+
+  function renderActivityGrid() {
+    const ownActivity = new Map((space?.activity || []).map((item) => [item.day, item]));
+    const partnerActivity = new Map((space?.partner?.activity || []).map((item) => [item.day, item]));
+    const today = new Date();
+    const days = Array.from({ length: 365 }, (_, index) => {
+      const d = new Date(today);
+      d.setDate(today.getDate() - (364 - index));
+      const key = d.toISOString().slice(0, 10);
+      return { key, date: d, own: ownActivity.get(key), partner: partnerActivity.get(key) };
+    });
+    const hasPartner = Boolean(space?.partner?.username);
+    const columnCount = Math.ceil(days.length / 7);
+    const maxWords = Math.max(
+      1,
+      ...days.flatMap((day) => [Number(day.own?.word_count || 0), Number(day.partner?.word_count || 0)])
+    );
+    const levelFor = (count: number) => (count > 0 ? Math.max(1, Math.ceil((count / maxWords) * 4)) : 0);
+    const monthLabels = days
+      .map((day, index) => ({ day, index }))
+      .filter(({ day, index }) => day.date.getDate() === 1 || index === 0)
+      .map(({ day, index }) => ({
+        key: `${day.key}-month`,
+        label: `${day.date.getMonth() + 1}月`,
+        column: Math.floor(index / 7) + 1,
+      }));
+    return (
+      <div className="activity-board">
+        <div className="activity-grid" style={{ "--activity-columns": columnCount } as CSSProperties}>
+          {days.map((day) => {
+            const ownCount = Number(day.own?.word_count || 0);
+            const partnerCount = Number(day.partner?.word_count || 0);
+            return (
+              <span
+                key={day.key}
+                className={`activity-cell ${hasPartner ? "split" : ""}`}
+                title={
+                  hasPartner
+                    ? `${day.key} · 你 ${ownCount} 词 · 搭子 ${partnerCount} 词`
+                    : `${day.key} · ${ownCount} 词`
+                }
+              >
+                <i className={`activity-half own level-${levelFor(ownCount)}`} />
+                {hasPartner ? <i className={`activity-half partner level-${levelFor(partnerCount)}`} /> : null}
+              </span>
+            );
+          })}
+        </div>
+        <div className="activity-months" style={{ "--activity-columns": columnCount } as CSSProperties}>
+          {monthLabels.map((month) => (
+            <span key={month.key} style={{ gridColumn: month.column }}>{month.label}</span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSpacePanel() {
+    const ownRecent = space?.recent_series || playerNodes.slice(0, 8);
+    const partnerRecent = space?.partner?.recent_series || [];
+    const unreadShares = space?.unread_shares || [];
+    const inboundRequests = space?.partner_inbound_requests || [];
+    const outboundRequests = space?.partner_outbound_requests || [];
+    const partner = space?.partner || null;
+    return (
+      <section className="space-pane">
+        <section className="space-top-panel">
+          <section className="space-activity-panel">
+            <div className="section-title">
+              <CalendarClock size={17} />
+              <span>最近 365 天</span>
+            </div>
+            {renderActivityGrid()}
+            <div className="activity-legend">
+              <span>{profile.nickname}</span>
+              {space?.partner?.username ? <span>{space.partner.profile?.nickname || space.partner.username}</span> : <span>未绑定搭子</span>}
+            </div>
+          </section>
+          <section className="partner-panel">
+            <div className="section-title">
+              <Users size={17} />
+              <span>搭子</span>
+            </div>
+            {partner ? (
+              <div className="partner-card">
+                <div className="partner-avatar">{partner.profile?.avatar_data_url ? <img src={partner.profile.avatar_data_url} alt={partner.username} /> : (partner.profile?.nickname || partner.username).slice(0, 1)}</div>
+                <div className="partner-meta">
+                  <strong>{partner.profile?.nickname || partner.username}</strong>
+                  <span>@{partner.username}</span>
+                  <small>{partner.last_login_at ? `上次登录 ${formatDate(partner.last_login_at)}` : "暂无登录记录"}</small>
+                </div>
+              </div>
+            ) : (
+              <div className="partner-request-form">
+                <label>
+                  <span>发送搭子申请</span>
+                  <input
+                    placeholder="输入对方用户名"
+                    value={partnerRequestName}
+                    onChange={(event) => setPartnerRequestName(event.target.value)}
+                    disabled={!syncConfig.access_token || !space?.can_send_partner_request || partnerBusy}
+                  />
+                </label>
+                <button
+                  className="runtime-action compact"
+                  onClick={onCreatePartnerRequest}
+                  disabled={!syncConfig.access_token || !space?.can_send_partner_request || partnerBusy || !partnerRequestName.trim()}
+                >
+                  <Send size={15} />
+                  <span>发送申请</span>
+                </button>
+                {!syncConfig.access_token ? <div className="empty">请先登录云同步账号。</div> : null}
+                {!space?.can_send_partner_request ? <div className="empty">你已有搭子，不能再发起申请。</div> : null}
+              </div>
+            )}
+            {inboundRequests.length ? (
+              <div className="partner-request-list">
+                {inboundRequests.map((request) => (
+                  <article key={request.id} className="partner-request-card">
+                    <div>
+                      <strong>{request.from_profile?.nickname || request.from_username}</strong>
+                      <span>@{request.from_username}</span>
+                    </div>
+                    <small>{formatDate(request.created_at)}</small>
+                    <button className="runtime-action compact" onClick={() => onAcceptPartnerRequest(request.id)} disabled={partnerBusy || Boolean(partner)}>
+                      <Users size={15} />
+                      <span>接受申请</span>
+                    </button>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            {outboundRequests.length ? (
+              <div className="partner-outbound-hint">
+                已发送：{outboundRequests.map((entry) => `@${entry.to_username}`).join("、")}
+              </div>
+            ) : null}
+          </section>
+        </section>
+        {unreadShares.length ? (
+          <section className="unread-share-panel">
+            <div className="section-title">
+              <Send size={17} />
+              <span>搭子分享</span>
+            </div>
+            <div className="unread-share-list">
+              {unreadShares.map((share) => (
+                <article className="unread-share-card" key={share.id}>
+                  <div>
+                    <strong>{share.sender_profile?.nickname || share.sender_username}</strong>
+                    <span>{formatDate(share.created_at)}</span>
+                  </div>
+                  <p>{share.comment || "分享了一句台词给你。"}</p>
+                  <blockquote>{share.sentence?.example_ja || "未附带句子"}</blockquote>
+                  {share.sentence?.example_zh ? <small>{share.sentence.example_zh}</small> : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        <section className="recent-series-panel">
+          <div className="section-title">
+            <Clapperboard size={17} />
+            <span>最近在看</span>
+          </div>
+          <div className="series-grid">
+            {ownRecent.length || partnerRecent.length ? [
+              ...ownRecent.map((node) => ({ node, owner: "你" })),
+              ...partnerRecent.map((node) => ({ node, owner: partner?.profile?.nickname || partner?.username || "搭子" })),
+            ].map(({ node, owner }, idx) => {
+              const shot = node.items.find((item) => item.screenshot_path);
+              const canShowShot = owner === "你" && shot?.id;
+              return (
+                <article className="series-card" key={`${owner}-${sourceKey(node)}-${idx}`}>
+                  {canShowShot ? <img src={screenshotUrl(shot.id)} alt={node.series_name} /> : <div className="series-card-empty" />}
+                  <em>{owner}</em>
+                  <strong>{node.series_name}</strong>
+                  <span>{node.episode_name}</span>
+                  <small>{node.items.length} 条记录</small>
+                </article>
+              );
+            }) : <div className="empty centered">同步过带播放来源的句子或词条后会显示最近看的剧集。</div>}
+          </div>
+        </section>
+      </section>
+    );
+  }
+
+  function renderProfilePanel() {
+    return (
+      <section className="profile-pane">
+        {!isProfileLocked ? (
+          <section className="profile-card">
+            <div className="section-title">
+              <User size={17} />
+              <span>个人信息</span>
+            </div>
+            <div className="avatar-row">
+              <div className="avatar-preview">{profile.avatar_data_url ? <img src={profile.avatar_data_url} alt="avatar" /> : profile.nickname.slice(0, 1)}</div>
+              <div className="avatar-tip">头像仅支持预设选择</div>
+            </div>
+            <div>
+              <div className="field-title">
+                <User size={15} />
+                预选头像
+              </div>
+              <div className="avatar-preset-grid">
+                {PRESET_AVATARS.map((avatar) => (
+                  <button
+                    key={avatar.id}
+                    className={`avatar-preset-button ${selectedPresetAvatarId === avatar.id ? "active" : ""}`}
+                    title={avatar.originalName}
+                    onClick={() => onSelectPresetAvatar(avatar)}
+                    disabled={loading || Boolean(avatarSelectingId)}
+                  >
+                    <img src={avatar.thumbUrl} alt={avatar.originalName} />
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label>
+              <span>昵称</span>
+              <input value={profile.nickname} onChange={(event) => setProfile({ ...profile, nickname: event.target.value })} disabled={loading} />
+            </label>
+            <div>
+              <div className="field-title"><Palette size={15} />主题色</div>
+              <div className="swatch-row">
+                {THEME_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    className={`swatch ${profile.theme_color === color ? "active" : ""}`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => setProfile({ ...profile, theme_color: color })}
+                    title={color}
+                    disabled={loading}
+                  />
+                ))}
+              </div>
+            </div>
+            <button className="runtime-action" onClick={onSaveProfile} disabled={loading}>
+              <Save size={16} />
+              <span>保存个人信息</span>
+            </button>
+          </section>
+        ) : null}
+
+        <section className="profile-card">
+          <div className="section-title">
+            <Cloud size={17} />
+            <span>登录与同步</span>
+          </div>
+          {error ? (
+            <div className="connection-card">
+              <strong>操作未完成</strong>
+              <span>{error}</span>
+            </div>
+          ) : null}
+          <div className="sync-state">
+            <strong>{syncConfig.username ? `已登录 ${syncConfig.username}` : "未登录"}</strong>
+            <span>
+              {syncConfig.last_sync_at
+                ? `上次同步 ${formatDate(syncConfig.last_sync_at)} · 版本 ${syncConfig.last_server_version || 0}`
+                : "登录后可同步句子、词条和图片引用"}
+            </span>
+          </div>
+          <label>
+            <span>自动同步间隔</span>
+            <select
+              value={String(syncConfig.auto_sync_interval_minutes || 0)}
+              onChange={(event) => onUpdateAutoSyncInterval(Number(event.target.value))}
+              disabled={loading || !syncConfig.access_token}
+            >
+              <option value="0">关闭</option>
+              <option value="5">每 5 分钟</option>
+              <option value="15">每 15 分钟</option>
+              <option value="30">每 30 分钟</option>
+              <option value="60">每 1 小时</option>
+            </select>
+          </label>
+          {syncConflicts.length ? (
+            <div className="sync-conflict-panel">
+              <strong>需要你确认的内容（{syncConflicts.length}）</strong>
+              <div className="sentence-actions">
+                <button
+                  className="runtime-action compact"
+                  disabled={Boolean(resolvingConflictKey)}
+                  onClick={() => onResolveAllSyncConflicts("keep_local")}
+                >
+                  <Save size={14} />
+                  <span>全部使用这台设备内容</span>
+                </button>
+                <button
+                  className="runtime-action secondary compact"
+                  disabled={Boolean(resolvingConflictKey)}
+                  onClick={() => onResolveAllSyncConflicts("accept_remote")}
+                >
+                  <Download size={14} />
+                  <span>全部使用云端内容</span>
+                </button>
+              </div>
+              <div className="sync-conflict-list">
+                {syncConflicts.map((conflict) => {
+                  const key = `${conflict.type}:${conflict.uuid}`;
+                  return (
+                    <article key={key} className="sync-conflict-item">
+                      <div>
+                        <strong>{conflictTypeLabel(conflict)}</strong>
+                        <span>{conflict.local_change === "deleted" || conflict.remote_change === "deleted" ? "包含删除操作" : "内容不一致"}</span>
+                      </div>
+                      <small>这台设备：{conflictPreview(conflict, "local")} · 云端：{conflictPreview(conflict, "remote")}</small>
+                      <small>{conflictFieldHints(conflict)}</small>
+                      <div className="sentence-actions">
+                        <button
+                          className="runtime-action compact"
+                          disabled={Boolean(resolvingConflictKey)}
+                          onClick={() => onResolveSyncConflict(conflict, "keep_local")}
+                        >
+                          <Save size={14} />
+                          <span>使用这台设备内容</span>
+                        </button>
+                        <button
+                          className="runtime-action secondary compact"
+                          disabled={Boolean(resolvingConflictKey)}
+                          onClick={() => onResolveSyncConflict(conflict, "accept_remote")}
+                        >
+                          <Download size={14} />
+                          <span>使用云端内容</span>
+                        </button>
+                      </div>
+                      {conflict.resolved_strategy ? <em>已选择：{conflict.resolved_strategy === "keep_local" ? "这台设备内容" : "云端内容"}</em> : null}
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          <div className="sentence-actions">
+            <button className="runtime-action" onClick={() => setShowLoginModal(true)} disabled={loading}>
+              <LogIn size={16} />
+              <span>登录</span>
+            </button>
+            <button className="runtime-action secondary" onClick={() => setShowRegisterModal(true)} disabled={loading}>
+              <User size={16} />
+              <span>注册</span>
+            </button>
+            <button className="runtime-action secondary" onClick={onRunSync} disabled={loading || !syncConfig.access_token}>
+              <RefreshCw size={16} />
+              <span>同步</span>
+            </button>
+            <button className="runtime-action secondary" onClick={onPullSync} disabled={loading || !syncConfig.access_token}>
+              <Download size={16} />
+              <span>下载云端更新</span>
+            </button>
+            <button className="runtime-action secondary" onClick={onLogoutSync} disabled={loading || !syncConfig.access_token}>
+              <X size={16} />
+              <span>登出</span>
+            </button>
+          </div>
+        </section>
+        {showLoginModal ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="sentence-edit-modal">
+              <div className="modal-header">
+                <div className="section-title">
+                  <LogIn size={17} />
+                  <span>登录云同步</span>
+                </div>
+                <button className="icon-button" onClick={() => setShowLoginModal(false)} title="关闭">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="sentence-editor">
+                <label>
+                  <span>服务器 HTTPS 地址</span>
+                  <input placeholder="https://wordbook.example.com" value={loginForm.serverUrl} onChange={(event) => setLoginForm({ ...loginForm, serverUrl: event.target.value })} />
+                </label>
+                <label>
+                  <span>用户名</span>
+                  <input value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} />
+                </label>
+                <label>
+                  <span>密码</span>
+                  <input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
+                </label>
+                <div className="sentence-actions">
+                  <button className="runtime-action compact" onClick={onLoginSync} disabled={loading}>
+                    <LogIn size={15} />
+                    <span>确认登录</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {showRegisterModal ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="sentence-edit-modal">
+              <div className="modal-header">
+                <div className="section-title">
+                  <User size={17} />
+                  <span>注册云同步</span>
+                </div>
+                <button className="icon-button" onClick={() => setShowRegisterModal(false)} title="关闭">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="sentence-editor">
+                <label>
+                  <span>服务器 HTTPS 地址</span>
+                  <input placeholder="https://wordbook.example.com" value={loginForm.serverUrl} onChange={(event) => setLoginForm({ ...loginForm, serverUrl: event.target.value })} />
+                </label>
+                <label>
+                  <span>用户名</span>
+                  <input value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} />
+                </label>
+                <label>
+                  <span>密码（至少 8 位）</span>
+                  <input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} />
+                </label>
+                <div className="sentence-actions">
+                  <button className="runtime-action compact" onClick={onRegisterSync} disabled={loading}>
+                    <User size={15} />
+                    <span>确认注册</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={appStyle}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">
@@ -821,6 +1782,12 @@ export default function App() {
           </div>
         </div>
         <div className="top-actions">
+          <button className="icon-button" onClick={() => setView("profile")} title={syncConfig.username ? `已登录 ${syncConfig.username}` : "登录与设置"}>
+            {syncConfig.username ? <User size={17} /> : <LogIn size={17} />}
+          </button>
+          <button className="icon-button" onClick={onRunSync} disabled={loading || !syncConfig.access_token} title="同步到服务器">
+            <Cloud size={17} />
+          </button>
           <div className={`service-pill ${isSidecarOnline ? "online" : "offline"}`}>
             <Server size={16} />
             <span>{serviceText}</span>
@@ -853,12 +1820,18 @@ export default function App() {
           <button className={view === "sentences" ? "active" : ""} onClick={() => setView("sentences")} title="句子">
             <MessageSquareText size={19} />
           </button>
+          <button className={view === "space" ? "active" : ""} onClick={() => setView("space")} title="追剧空间">
+            <Users size={19} />
+          </button>
+          <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")} title="个人信息">
+            <Settings size={19} />
+          </button>
           <button className={view === "runtime" ? "active" : ""} onClick={() => setView("runtime")} title="运行中心">
             <Terminal size={19} />
           </button>
         </aside>
 
-        {view !== "runtime" ? <section className="library-pane">
+        {view === "byPlayer" || view === "byTime" || view === "sentences" ? <section className="library-pane">
           <div className="pane-header">
             <div>
               <span className="eyebrow">{view === "byPlayer" ? "来源浏览" : view === "sentences" ? "句子浏览" : "时间线"}</span>
@@ -887,10 +1860,12 @@ export default function App() {
           <div className="scroll-area">{view === "byPlayer" ? renderSourceList() : view === "sentences" ? renderSentenceList() : renderTimeList()}</div>
         </section> : null}
 
-        <section className={view === "runtime" ? "detail-pane detail-pane-wide" : "detail-pane"}>
+        <section className={view === "runtime" || view === "space" || view === "profile" ? "detail-pane detail-pane-wide" : "detail-pane"}>
           {view === "runtime" ? renderRuntimePanel() : null}
+          {view === "space" ? renderSpacePanel() : null}
+          {view === "profile" ? renderProfilePanel() : null}
           {view === "sentences" ? renderSentencePanel() : null}
-          {view !== "runtime" ? (
+          {view !== "runtime" && view !== "space" && view !== "profile" ? (
           <>
           {view !== "sentences" ? (
           <>
@@ -947,8 +1922,11 @@ export default function App() {
                 <>
                   <div className="word-title">
                     <h2>{selectedTitle}</h2>
-                    {selectedItems[0]?.reading ? <span>{selectedItems[0].reading}</span> : null}
+                    {selectedItems[0]?.reading ? <span>{toHiragana(selectedItems[0].reading)}{accentMark(selectedItems[0].accent)}</span> : null}
                     {selectedItems[0]?.jlpt_level ? <span className="jlpt-pill">{selectedItems[0].jlpt_level}</span> : null}
+                    <button className="icon-button word-speak-button" onClick={() => speakJapanese(selectedItems[0]?.dictionary_form || selectedTitle)} title="朗读词语">
+                      <Volume2 size={15} />
+                    </button>
                   </div>
                   {selectedMeanings.length ? (
                     <ol className="meaning-list">
