@@ -52,6 +52,7 @@ from app.models.schemas import (
     VocabUpdateItemRequest,
 )
 from app.services.dictionary_service import lookup_dictionary
+from app.services.export_service import build_wordbook_xlsx_bytes
 from app.services.asr_service import (
     get_asr_status,
     preload_asr_model,
@@ -59,6 +60,7 @@ from app.services.asr_service import (
     transcribe_audio_chunk,
 )
 from app.services.ocr_service import (
+    get_ocr_lang,
     get_paddleocr_import_error,
     get_paddleocr_import_traceback,
     run_ocr,
@@ -143,6 +145,7 @@ def health():
         "asr": get_asr_status(),
         "ocr": {
             "available": not ocr_import_error,
+            "lang": get_ocr_lang(),
             "import_error": ocr_import_error or None,
             "import_traceback": get_paddleocr_import_traceback() or None,
         },
@@ -156,6 +159,7 @@ def ocr_recognize(payload: OcrRecognizeRequest):
             payload.image_base64,
             crop_rect=payload.crop_rect.model_dump() if payload.crop_rect else None,
             viewport=payload.viewport.model_dump() if payload.viewport else None,
+            lang=payload.lang,
         )
         logger.warning(
             "ocr result ja=%s zh=%s raw=%s",
@@ -251,6 +255,21 @@ def sentence_screenshot(sentence_id: int):
     if not path:
         raise HTTPException(status_code=404, detail="screenshot not found")
     return FileResponse(path)
+
+
+@app.get("/export/wordbook.xlsx")
+def export_wordbook_xlsx():
+    """Export all vocab items and all sentences to two Excel sheets."""
+    try:
+        body = build_wordbook_xlsx_bytes()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"export failed: {exc}") from exc
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return Response(
+        content=body,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="drama-wordbook-{stamp}.xlsx"'},
+    )
 
 
 @app.get("/vocab/heads", response_model=list[VocabHead])

@@ -17,8 +17,58 @@ from uuid import uuid4
 from app.services.accent_service import lookup_pitch_accent
 from app.services.jlpt_service import lookup_jlpt_entry, normalize_jlpt_level
 
-DB_PATH = Path(__file__).resolve().parent.parent / "db.sqlite3"
-SCREENSHOT_DIR = Path(__file__).resolve().parent.parent / "data" / "screenshots"
+def _resolve_data_root() -> Path:
+    """Pick a user-writable data directory that survives app reinstall/upgrade.
+
+    Priority:
+      1. ``DRAMA_WORDBOOK_DATA_DIR`` — set by Electron to ``app.getPath('userData')``
+         on packaged builds (macOS: ``~/Library/Application Support/Drama Wordbook``,
+         Windows: ``%APPDATA%\\Drama Wordbook``, Linux: ``~/.config/Drama Wordbook``).
+      2. Legacy in-bundle path ``apps/sidecar/app/`` — fine for dev (working tree),
+         but inside the .app bundle on packaged installs, where it would be wiped
+         on every reinstall. Treated only as a fallback / migration source.
+    """
+    explicit = os.environ.get("DRAMA_WORDBOOK_DATA_DIR", "").strip()
+    if explicit:
+        base = Path(explicit).expanduser().resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    return Path(__file__).resolve().parent.parent
+
+
+_LEGACY_DATA_ROOT = Path(__file__).resolve().parent.parent
+DATA_ROOT = _resolve_data_root()
+DB_PATH = DATA_ROOT / "db.sqlite3"
+SCREENSHOT_DIR = DATA_ROOT / "data" / "screenshots"
+
+
+def _migrate_legacy_data_once() -> None:
+    """Best-effort: copy old in-bundle db + screenshots into the new user-data
+    location on first run after upgrading. No-op if the new DB already exists.
+    """
+    try:
+        if DATA_ROOT == _LEGACY_DATA_ROOT:
+            return
+        if DB_PATH.exists():
+            return
+        legacy_db = _LEGACY_DATA_ROOT / "db.sqlite3"
+        if legacy_db.exists():
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+
+            shutil.copy2(legacy_db, DB_PATH)
+        legacy_shots = _LEGACY_DATA_ROOT / "data" / "screenshots"
+        if legacy_shots.exists() and not SCREENSHOT_DIR.exists():
+            SCREENSHOT_DIR.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+
+            shutil.copytree(legacy_shots, SCREENSHOT_DIR, dirs_exist_ok=True)
+    except Exception:
+        # Never block boot on migration; user can recover from sync server.
+        pass
+
+
+_migrate_legacy_data_once()
 DEFAULT_TAGS = ["kksk", "好搞笑", "高频词"]
 SYNC_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wordbook-sync")
 DEFAULT_PROFILE = {
@@ -642,6 +692,46 @@ def get_vocab_count() -> int:
     try:
         row = conn.execute("SELECT COUNT(*) AS count FROM vocab_item").fetchone()
         return int(row["count"] or 0)
+    finally:
+        conn.close()
+
+
+def get_all_vocab_items() -> list[dict]:
+    """All vocab rows for export (no pagination)."""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT i.*, h.dictionary_form, s.tags_json, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
+                   p.series_name, p.episode_name, s.sentence_uuid
+            FROM vocab_item i
+            LEFT JOIN vocab_head h ON h.id = i.head_id
+            LEFT JOIN sentence s ON s.id = i.sentence_id
+            LEFT JOIN playback_context p ON p.id = i.playback_context_id
+            ORDER BY i.created_at DESC
+            """
+        ).fetchall()
+        return [_row_to_item(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_all_sentences_flat() -> list[dict]:
+    """All sentences for export (no pagination)."""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.*, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
+                   p.series_name, p.episode_name, COUNT(i.id) AS word_count
+            FROM sentence s
+            LEFT JOIN playback_context p ON p.id = s.playback_context_id
+            LEFT JOIN vocab_item i ON i.sentence_id = s.id
+            GROUP BY s.id
+            ORDER BY s.created_at DESC
+            """
+        ).fetchall()
+        return [_row_to_sentence(r) for r in rows]
     finally:
         conn.close()
 

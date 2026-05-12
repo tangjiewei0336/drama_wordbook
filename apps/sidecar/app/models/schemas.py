@@ -18,6 +18,10 @@ class ViewportSize(BaseModel):
 class OcrRecognizeRequest(BaseModel):
     image_base64: str = Field(..., description="PNG/JPEG image as base64 data")
     languages: list[str] = Field(default_factory=lambda: ["ja", "zh"])
+    # PaddleOCR 3.x recognizer lang (e.g. "ch", "japan", "en"); empty falls back
+    # to the sidecar default. Use this when the caller has already split the
+    # image by script region (e.g. zh on the bottom, ja on top).
+    lang: str = ""
     crop_rect: CropRect | None = None
     viewport: ViewportSize | None = None
 

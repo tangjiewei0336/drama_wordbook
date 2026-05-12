@@ -16,7 +16,12 @@ logger = logging.getLogger("wordbook.sidecar.ocr")
 
 
 def _ensure_paddleocr_base_dir() -> None:
-    """PaddleOCR 在首次 import 时读取 PADDLE_OCR_BASE_DIR；默认 ~/.paddleocr 在无写 HOME 时会失败。"""
+    """PaddleOCR 在首次 import 时读取 PADDLE_OCR_BASE_DIR；默认 ~/.paddleocr 在无写 HOME 时会失败。
+
+    Resolution order: explicit override → packaged user-data dir → dev fallback.
+    The user-data option means OCR model weights (~hundreds of MB) survive app
+    upgrades, instead of being re-downloaded on every release.
+    """
     explicit = (
         os.environ.get("DRAMA_WORDBOOK_PADDLEOCR_HOME")
         or os.environ.get("PADDLE_OCR_BASE_DIR")
@@ -24,6 +29,12 @@ def _ensure_paddleocr_base_dir() -> None:
     ).strip()
     if explicit:
         base = Path(explicit).expanduser().resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        os.environ["PADDLE_OCR_BASE_DIR"] = str(base) + os.sep
+        return
+    data_dir = os.environ.get("DRAMA_WORDBOOK_DATA_DIR", "").strip()
+    if data_dir:
+        base = Path(data_dir).expanduser().resolve() / "paddleocr"
         base.mkdir(parents=True, exist_ok=True)
         os.environ["PADDLE_OCR_BASE_DIR"] = str(base) + os.sep
         return
@@ -71,6 +82,11 @@ def get_paddleocr_import_traceback() -> str:
     return _PADDLEOCR_IMPORT_TRACEBACK
 
 
+def get_ocr_lang() -> str:
+    """Expose the default recognition language (lang=) for /health."""
+    return _default_ocr_lang()
+
+
 def get_paddleocr_import_error() -> str:
     """Expose the import-time error string (for /health and clearer 500 detail)."""
     return _PADDLEOCR_IMPORT_ERROR
@@ -94,20 +110,55 @@ def _split_lang_lines(lines: list[str]) -> tuple[list[str], list[str]]:
     return ja_lines, zh_lines
 
 
-@lru_cache(maxsize=1)
-def get_ocr_engine():
+def _default_ocr_lang() -> str:
+    """Resolve the fallback recognition model from env / hardcoded default.
+
+    Default ``ch`` matches the upstream PaddleOCR 3.x multilingual recognizer.
+    Callers can override per request via ``OcrRecognizeRequest.lang`` (e.g.
+    ``japan`` for kana-heavy frames); this is what powers the Bilibili
+    extension's "japanese-on-top / chinese-on-bottom" split mode.
+    """
+    requested = (os.environ.get("DRAMA_WORDBOOK_OCR_LANG") or "").strip().lower()
+    if requested:
+        return requested
+    return "ch"
+
+
+def _normalize_lang(lang: str | None) -> str:
+    text = str(lang or "").strip().lower()
+    return text or _default_ocr_lang()
+
+
+@lru_cache(maxsize=8)
+def get_ocr_engine_for_lang(lang: str):
+    """Return (and cache) a PaddleOCR engine instance for the given language.
+
+    PaddleOCR 3.x: pipeline tuning happens inside predict(); the constructor
+    no longer accepts 2.x's use_angle_cls / show_log. We disable doc-level
+    orientation/unwarp because Bilibili subtitles are horizontal screen text
+    and the extra steps just slow inference.
+    """
     if PaddleOCR is None:
         return None
     try:
-        # PaddleOCR 2.x: PP-OCR + angle classifier; show_log=False keeps stderr quiet.
-        return PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+        return PaddleOCR(
+            lang=lang,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
     except Exception as exc:  # pragma: no cover - env specific
-        logger.exception("PaddleOCR initialization failed")
+        logger.exception("PaddleOCR initialization failed (lang=%s)", lang)
         raise RuntimeError(
-            f"PaddleOCR failed to start: {type(exc).__name__}: {exc}. "
+            f"PaddleOCR failed to start: {type(exc).__name__}: {exc} (lang={lang!r}). "
             "If using a venv, reinstall: cd apps/sidecar && pip install -e . "
-            "(expects paddleocr>=2.10,<3 and paddlepaddle)."
+            "(expects paddleocr>=3.0,<4 with paddlex[ocr-core] and paddlepaddle>=3.0)."
         ) from exc
+
+
+def get_ocr_engine():
+    """Backwards-compatible accessor; returns the default-lang engine."""
+    return get_ocr_engine_for_lang(_default_ocr_lang())
 
 
 def decode_base64_image(image_base64: str) -> Image.Image:
@@ -208,9 +259,13 @@ def _extract_blocks_from_legacy_ocr_result(result: list) -> list[dict]:
 
 
 def run_ocr(
-    image_base64: str, crop_rect: dict | None = None, viewport: dict | None = None
+    image_base64: str,
+    crop_rect: dict | None = None,
+    viewport: dict | None = None,
+    lang: str | None = None,
 ) -> tuple[list[str], list[str], list[dict]]:
-    engine = get_ocr_engine()
+    effective_lang = _normalize_lang(lang)
+    engine = get_ocr_engine_for_lang(effective_lang)
     if engine is None:
         detail = _PADDLEOCR_IMPORT_ERROR or "module import returned None"
         raise RuntimeError(
@@ -250,5 +305,9 @@ def run_ocr(
     lines = [b["text"] for b in raw_blocks]
     ja_lines, zh_lines = _split_lang_lines(lines)
     if not ja_lines and lines:
-        logger.warning("ja_lines empty; raw text sample=%s", " | ".join(lines[:6]))
+        logger.warning(
+            "ja_lines empty (lang=%s); raw text sample=%s",
+            effective_lang,
+            " | ".join(lines[:6]),
+        )
     return ja_lines, zh_lines, raw_blocks

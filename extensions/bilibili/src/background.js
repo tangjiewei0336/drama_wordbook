@@ -256,7 +256,7 @@ async function postPlaybackContext(payload) {
   return res.json();
 }
 
-async function postOcr(imageBase64, cropRect, viewport) {
+async function postOcr(imageBase64, cropRect, viewport, lang = "") {
   const payload = {
     image_base64: imageBase64,
     languages: ["ja", "zh"]
@@ -264,6 +264,9 @@ async function postOcr(imageBase64, cropRect, viewport) {
   if (cropRect && viewport) {
     payload.crop_rect = cropRect;
     payload.viewport = viewport;
+  }
+  if (lang) {
+    payload.lang = lang;
   }
 
   const res = await fetchSidecar(`/ocr/recognize`, {
@@ -783,10 +786,15 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
   let ocrRes;
   if (settings.fixedSubtitleLayout) {
     const split = Number(settings.subtitleSplitRatio || 0.5);
+    // Convention: 上 = 日文（kana + kanji），下 = 中文。subtitleSplitRatio 表示中文占比从顶部算起。
+    // Drama subtitles on Bilibili usually have Japanese above the Chinese translation, so the
+    // bottom band (split..1) is japanese and the top band (0..split) is chinese.
     const zhDataUrl = await cropDataUrlByVerticalRatio(ocrInputDataUrl, 0, split);
     const jaDataUrl = await cropDataUrlByVerticalRatio(ocrInputDataUrl, split, 1);
-    const zhOcr = await postOcr(dataUrlToBase64(zhDataUrl), null, null);
-    const jaOcr = await postOcr(dataUrlToBase64(jaDataUrl), null, null);
+    const [zhOcr, jaOcr] = await Promise.all([
+      postOcr(dataUrlToBase64(zhDataUrl), null, null, "ch"),
+      postOcr(dataUrlToBase64(jaDataUrl), null, null, "japan")
+    ]);
     const zhTexts = extractOcrTexts(zhOcr).rawTexts;
     const jaTexts = extractOcrTexts(jaOcr).rawTexts;
     ocrRes = {

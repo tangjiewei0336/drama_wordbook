@@ -8,8 +8,10 @@ app/services/__init__.py
 app/services/accent_service.py
 app/services/asr_service.py
 app/services/dictionary_service.py
+app/services/export_service.py
 app/services/jlpt_service.py
 app/services/ocr_service.py
+app/services/review_service.py
 app/services/tokenizer_service.py
 app/services/vocab_service.py
 drama_wordbook_sidecar.egg-info/PKG-INFO

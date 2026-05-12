@@ -34,6 +34,7 @@ import {
   deletePlayerGroup,
   deleteVocabItem,
   deleteSentence,
+  downloadWordbookExcel,
   fetchByPlayer,
   fetchByTime,
   createPartnerRequest,
@@ -302,6 +303,8 @@ export default function App() {
   const [spaceError, setSpaceError] = useState("");
   const [libraryError, setLibraryError] = useState("");
   const [profileError, setProfileError] = useState("");
+  const [exportExcelBusy, setExportExcelBusy] = useState(false);
+  const [exportExcelError, setExportExcelError] = useState("");
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [avatarSelectingId, setAvatarSelectingId] = useState("");
@@ -1249,6 +1252,19 @@ export default function App() {
     }
   }
 
+  async function onExportWordbookExcel() {
+    if (!isSidecarOnline) return;
+    setExportExcelError("");
+    setExportExcelBusy(true);
+    try {
+      await downloadWordbookExcel();
+    } catch (err) {
+      setExportExcelError(String((err as Error).message || err));
+    } finally {
+      setExportExcelBusy(false);
+    }
+  }
+
   async function onLoginSync() {
     setLoading(true);
     setSyncError("");
@@ -1909,6 +1925,29 @@ export default function App() {
             </button>
           </section>
         ) : null}
+
+        <section className="profile-card">
+          <div className="section-title">
+            <Download size={17} />
+            <span>导出到 Excel</span>
+          </div>
+          <p className="muted">将所有生词条目与收藏句子分别导出到两个工作表（「生词」「句子」），便于备份或在外部表格中筛选。</p>
+          {exportExcelError ? (
+            <div className="connection-card">
+              <strong>导出失败</strong>
+              <span>{exportExcelError}</span>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="runtime-action"
+            onClick={onExportWordbookExcel}
+            disabled={loading || exportExcelBusy || !isSidecarOnline}
+          >
+            <Download size={16} />
+            <span>{exportExcelBusy ? "正在生成…" : "下载 Excel"}</span>
+          </button>
+        </section>
 
         <section className="profile-card">
           <div className="section-title">

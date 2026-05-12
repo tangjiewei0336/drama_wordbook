@@ -10,14 +10,20 @@ dependencies = [
   "certifi>=2024.8.30",
   "faster-whisper>=1.1.0",
   "pillow>=10.4.0",
-  # Stay on PaddleOCR 2.10.x: uses classic PP-OCR + opencv/shapely stack.
-  # PaddleOCR 3.x pulls PaddleX pipelines and often fails with "dependency error"
-  # or init failures in packaged / minimal environments.
-  "paddleocr>=2.10.0,<3.0.0",
-  "paddlepaddle>=2.6.0",
+  # PaddleOCR 3.x (PP-OCRv4/v5) ships a multilingual recognizer that handles
+  # mixed CJK lines (Chinese + Japanese kana) far better than 2.x's per-lang
+  # models. Packaging caveats are addressed by sidecar.spec collecting paddlex
+  # data + Cython resource templates.
+  "paddleocr>=3.0.0,<4.0.0",
+  "paddlepaddle>=3.0.0",
+  # PaddleOCR 3.x routes through PaddleX pipelines; without the OCR extra,
+  # `PaddleOCR(...)` init fails with "A dependency error occurred during
+  # pipeline creation".
+  "paddlex[ocr-core]>=3.5.0,<3.6.0",
   "sudachipy>=0.6.8",
   "sudachidict-core>=20241021",
   "pyopenjtalk>=0.4.0",
+  "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
