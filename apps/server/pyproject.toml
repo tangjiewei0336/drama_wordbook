@@ -5,6 +5,7 @@ description = "Public sync server for Drama Wordbook"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0",
+  "python-multipart>=0.0.9",
   "uvicorn[standard]>=0.30.0",
   "pydantic>=2.8.0",
   "psycopg[binary]>=3.2.0",

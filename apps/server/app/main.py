@@ -9,6 +9,7 @@ import os
 import secrets
 import sqlite3
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -611,7 +612,14 @@ class AdminInviteCodePayload(BaseModel):
     code: str = ""
 
 
-app = FastAPI(title="Drama Wordbook Server", version="0.1.0")
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    SHARE_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    init_db()
+    yield
+
+
+app = FastAPI(title="Drama Wordbook Server", version="0.1.0", lifespan=_app_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
@@ -625,12 +633,6 @@ app.mount(
     StaticFiles(directory=str(SHARE_SCREENSHOT_DIR)),
     name="share_screenshots_media",
 )
-
-
-@app.on_event("startup")
-def startup() -> None:
-    SHARE_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    init_db()
 
 
 def current_user(authorization: str = Header(default="")) -> sqlite3.Row:

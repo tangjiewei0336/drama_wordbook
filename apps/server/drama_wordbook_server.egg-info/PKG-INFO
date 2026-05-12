@@ -4,6 +4,7 @@ Version: 0.1.0
 Summary: Public sync server for Drama Wordbook
 Requires-Python: >=3.11
 Requires-Dist: fastapi>=0.115.0
+Requires-Dist: python-multipart>=0.0.9
 Requires-Dist: uvicorn[standard]>=0.30.0
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: psycopg[binary]>=3.2.0
