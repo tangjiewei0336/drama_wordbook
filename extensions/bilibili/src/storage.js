@@ -3,6 +3,15 @@ const RECENT_WORDS_KEY = "recent_words";
 
 export const DEFAULT_SIDECAR_BASE_URL = "http://127.0.0.1:17321";
 
+/** Map loopback DNS names that may resolve to IPv6 (::1) to IPv4, matching sidecar bind (127.0.0.1). */
+function canonicalSidecarHost(u) {
+  const h = u.hostname.toLowerCase();
+  if (h === "localhost" || h === "::1") {
+    return `127.0.0.1${u.port ? `:${u.port}` : ""}`;
+  }
+  return u.host;
+}
+
 /** Origin only (scheme + host + port), defaults to Drama Wordbook local sidecar. */
 export function normalizeSidecarBaseUrl(input) {
   const fallback = DEFAULT_SIDECAR_BASE_URL;
@@ -13,7 +22,7 @@ export function normalizeSidecarBaseUrl(input) {
     if (!/^https?:$/i.test(u.protocol)) {
       return fallback;
     }
-    return `${u.protocol}//${u.host}`;
+    return `${u.protocol}//${canonicalSidecarHost(u)}`;
   } catch {
     return fallback;
   }

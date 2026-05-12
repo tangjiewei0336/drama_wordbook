@@ -21,6 +21,11 @@ hiddenimports += collect_submodules("pyopenjtalk")
 datas = []
 datas += collect_data_files("sudachidict_core")
 datas += collect_data_files("pyopenjtalk")
+# PaddleOCR 3.x (PaddleX pipelines) ships YAML/offline configs as package data.
+# Without these, PyInstaller builds raise at runtime:
+# "The pipeline (OCR) does not exist! Please use a pipeline name or a config file path!"
+datas += collect_data_files("paddleocr")
+datas += collect_data_files("paddlex")
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]
 
 a = Analysis(

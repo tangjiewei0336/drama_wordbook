@@ -8,6 +8,7 @@ import {
   Download,
   ExternalLink,
   LogIn,
+  MessageCircle,
   Palette,
   RefreshCw,
   Search,
@@ -293,6 +294,8 @@ export default function App() {
   const [sharingSentence, setSharingSentence] = useState(false);
   const [shareComment, setShareComment] = useState("");
   const [replyDraftByShare, setReplyDraftByShare] = useState<Record<number, string>>({});
+  /** 追剧空间 · 搭子分享详情（弹窗） */
+  const [shareDetailModalId, setShareDetailModalId] = useState<number | null>(null);
   const [syncError, setSyncError] = useState("");
   const [spaceError, setSpaceError] = useState("");
   const [libraryError, setLibraryError] = useState("");
@@ -1571,6 +1574,7 @@ export default function App() {
     const inboundRequests = space?.partner_inbound_requests || [];
     const outboundRequests = space?.partner_outbound_requests || [];
     const partner = space?.partner || null;
+    const detailShare = shareDetailModalId !== null ? unreadShares.find((s) => s.id === shareDetailModalId) || null : null;
     return (
       <section className="space-pane">
         <section className="space-top-panel">
@@ -1619,7 +1623,9 @@ export default function App() {
                   <span>发送申请</span>
                 </button>
                 {!syncConfig.access_token ? <div className="empty">请先登录云同步账号。</div> : null}
-                {!space?.can_send_partner_request ? <div className="empty">你已有搭子，不能再发起申请。</div> : null}
+                {syncConfig.access_token && !space?.can_send_partner_request ? (
+                  <div className="empty">你已有搭子，不能再发起申请。</div>
+                ) : null}
               </div>
             )}
             {inboundRequests.length ? (
@@ -1652,103 +1658,185 @@ export default function App() {
             <span>{spaceError}</span>
           </div>
         ) : null}
-        {unreadShares.length ? (
+        <section className="space-share-recent-row">
           <section className="unread-share-panel">
             <div className="section-title">
               <Send size={17} />
               <span>搭子分享</span>
             </div>
-            <div className="unread-share-list">
+            <div className="unread-share-stack">
               {unreadShares.map((share) => {
                 const myUser = syncConfig.username?.trim() || "";
                 const isOwnThread = Boolean(myUser && share.sender_username === myUser);
-                const originDefaultText = isOwnThread ? "已把这句台词分享给搭子。" : "分享了一句台词给你。";
+                const replyCount = Array.isArray(share.replies) ? share.replies.length : 0;
+                const detailOpen = shareDetailModalId === share.id;
+                const jaFull = String(share.sentence?.example_ja || "").trim() || "未附带句子";
+                const snippet = jaFull.length > 88 ? `${jaFull.slice(0, 86)}…` : jaFull;
+                const senderLabel = share.sender_profile?.nickname || share.sender_username;
+                const initials = senderLabel.trim().slice(0, 1) || "?";
                 return (
                   <article className="unread-share-card" key={share.id}>
-                    <div className="share-header">
-                      <strong>{share.sender_profile?.nickname || share.sender_username}</strong>
-                      {isOwnThread ? <small className="share-thread-own">我发起的</small> : null}
-                      <span className="share-header-time">{formatDate(share.created_at)}</span>
-                    </div>
-                    <div className="share-layout">
-                      <div className="share-main">
-                        {share.has_screenshot ? <img className="share-shot" src={shareScreenshotUrl(share.id)} alt="shared screenshot" /> : null}
-                        <blockquote>{share.sentence?.example_ja || "未附带句子"}</blockquote>
-                        {share.sentence?.example_zh ? <small>{share.sentence.example_zh}</small> : null}
+                    <div
+                      className="share-compact-row"
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={detailOpen}
+                      onClick={() => setShareDetailModalId((prev) => (prev === share.id ? null : share.id))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setShareDetailModalId((prev) => (prev === share.id ? null : share.id));
+                        }
+                      }}
+                    >
+                      <div className="share-compact-avatar" aria-hidden>
+                        {share.sender_profile?.avatar_data_url ? (
+                          <img src={share.sender_profile.avatar_data_url} alt="" />
+                        ) : (
+                          initials
+                        )}
                       </div>
-                      <div className="share-comment-tags">
-                        {[
-                          {
-                            id: `origin-${share.id}`,
-                            sender: share.sender_profile?.nickname || share.sender_username,
-                            text: (share.comment || "").trim() || originDefaultText,
-                          },
-                          ...(share.replies || []).map((reply) => ({
-                            id: String(reply.id),
-                            sender: reply.sender_profile?.nickname || reply.sender_username,
-                            text: (reply.comment || "").trim() || "评论",
-                          })),
-                        ].map((node) => (
-                          <div key={node.id} className="share-comment-tag">
-                            <strong>{node.sender}</strong>
-                            <span>{node.text}</span>
-                          </div>
-                        ))}
+                      <div className="share-compact-main">
+                        <div className="share-compact-meta">
+                          <strong>{senderLabel}</strong>
+                          {isOwnThread ? <span className="share-thread-own">我发起的</span> : null}
+                          <span className="share-compact-time">{formatDate(share.created_at)}</span>
+                        </div>
+                        <p className="share-compact-snippet">{snippet}</p>
                       </div>
-                    </div>
-                    <div className="share-actions">
-                      <button
-                        className="icon-button share-icon-btn"
-                        title="跳转播放"
-                        disabled={!share.sentence?.playback?.url}
-                        onClick={() => openExternal(withPlaybackTime(String(share.sentence?.playback?.url || ""), Number(share.sentence?.playback?.current_time || 0)))}
+                      <div
+                        className="share-compact-tools"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
                       >
-                        <ExternalLink size={14} />
-                      </button>
-                      <button className="icon-button share-icon-btn" title="收藏到我的句子" disabled={partnerBusy} onClick={() => onCollectShare(share)}>
-                        <Save size={14} />
-                      </button>
-                    </div>
-                    <div className="share-reply-box">
-                      <input
-                        value={replyDraftByShare[share.id] || ""}
-                        placeholder="回复这条分享"
-                        onChange={(event) => setReplyDraftByShare((current) => ({ ...current, [share.id]: event.target.value }))}
-                      />
-                      <button className="icon-button share-icon-btn" title="发送回复" disabled={partnerBusy} onClick={() => onReplyShare(share.id)}>
-                        <Send size={15} />
-                      </button>
+                        <button
+                          type="button"
+                          className="icon-button share-tool-btn"
+                          title="跳转播放"
+                          disabled={!share.sentence?.playback?.url}
+                          onClick={() =>
+                            openExternal(
+                              withPlaybackTime(
+                                String(share.sentence?.playback?.url || ""),
+                                Number(share.sentence?.playback?.current_time || 0)
+                              )
+                            )
+                          }
+                        >
+                          <ExternalLink size={16} />
+                        </button>
+                        <button type="button" className="icon-button share-tool-btn" title="收藏到我的句子" disabled={partnerBusy} onClick={() => onCollectShare(share)}>
+                          <Save size={16} />
+                        </button>
+                        {!detailOpen ? (
+                          <span className="share-comment-count-pill" title={`${replyCount} 条回复`}>
+                            <MessageCircle size={16} />
+                            <span>{replyCount}</span>
+                          </span>
+                        ) : null}
+                        <span className="share-expand-chevron" aria-hidden>
+                          {detailOpen ? <ChevronDown size={18} style={{ transform: "rotate(180deg)" }} /> : <ChevronDown size={18} />}
+                        </span>
+                      </div>
                     </div>
                   </article>
                 );
               })}
+              {!unreadShares.length ? <div className="empty centered share-empty-hint">暂无搭子分享动态。在扩展里保存句子并勾选分享给搭子后，会出现在这里。</div> : null}
             </div>
           </section>
-        ) : null}
-        <section className="recent-series-panel">
-          <div className="section-title">
-            <Clapperboard size={17} />
-            <span>最近在看</span>
-          </div>
-          <div className="series-grid">
-            {ownRecent.length || partnerRecent.length ? [
-              ...ownRecent.map((node) => ({ node, owner: "你" })),
-              ...partnerRecent.map((node) => ({ node, owner: partner?.profile?.nickname || partner?.username || "搭子" })),
-            ].map(({ node, owner }, idx) => {
-              const shot = node.items.find((item) => item.screenshot_path);
-              const canShowShot = owner === "你" && shot?.id;
-              return (
-                <article className="series-card" key={`${owner}-${sourceKey(node)}-${idx}`}>
-                  {canShowShot ? <img src={screenshotUrl(shot.id)} alt={node.series_name} /> : <div className="series-card-empty" />}
-                  <em>{owner}</em>
-                  <strong>{node.series_name}</strong>
-                  <span>{node.episode_name}</span>
-                  <small>{node.items.length} 条记录</small>
-                </article>
-              );
-            }) : <div className="empty centered">同步过带播放来源的句子或词条后会显示最近看的剧集。</div>}
-          </div>
+          <section className="recent-series-panel">
+            <div className="section-title">
+              <Clapperboard size={17} />
+              <span>最近在看</span>
+            </div>
+            <div className="series-grid">
+              {ownRecent.length || partnerRecent.length ? [
+                ...ownRecent.map((node) => ({ node, owner: "你" })),
+                ...partnerRecent.map((node) => ({ node, owner: partner?.profile?.nickname || partner?.username || "搭子" })),
+              ].map(({ node, owner }, idx) => {
+                const shot = node.items.find((item) => item.screenshot_path);
+                const canShowShot = owner === "你" && shot?.id;
+                return (
+                  <article className="series-card" key={`${owner}-${sourceKey(node)}-${idx}`}>
+                    {canShowShot ? <img src={screenshotUrl(shot.id)} alt={node.series_name} /> : <div className="series-card-empty" />}
+                    <em>{owner}</em>
+                    <strong>{node.series_name}</strong>
+                    <span>{node.episode_name}</span>
+                    <small>{node.items.length} 条记录</small>
+                  </article>
+                );
+              }) : <div className="empty centered">同步过带播放来源的句子或词条后会显示最近看的剧集。</div>}
+            </div>
+          </section>
         </section>
+        {detailShare ? (
+          <div
+            className="modal-backdrop share-detail-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="share-detail-title"
+            onClick={() => setShareDetailModalId(null)}
+          >
+            <div className="share-detail-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="modal-header share-detail-modal-header">
+                <div className="section-title" id="share-detail-title">
+                  <MessageCircle size={17} />
+                  <span>分享详情 · {detailShare.sender_profile?.nickname || detailShare.sender_username}</span>
+                </div>
+                <button className="icon-button" type="button" onClick={() => setShareDetailModalId(null)} title="关闭">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="share-detail-modal-scroll">
+                {detailShare.has_screenshot ? (
+                  <div className="share-detail-screenshot">
+                    <img className="share-shot share-shot-hero" src={shareScreenshotUrl(detailShare, syncConfig.server_url || "")} alt="分享剧照" />
+                  </div>
+                ) : null}
+                <div className="share-expanded-origin">
+                  <div className="share-expanded-bilingual">
+                    <p className="share-expanded-ja">
+                      {String(detailShare.sentence?.example_ja || "").trim() || "未附带句子"}
+                    </p>
+                    {detailShare.sentence?.example_zh ? <p className="share-expanded-zh">{detailShare.sentence.example_zh}</p> : null}
+                  </div>
+                  <p className="share-expanded-note">
+                    {(detailShare.comment || "").trim() ||
+                      (syncConfig.username?.trim() && detailShare.sender_username === syncConfig.username.trim()
+                        ? "已把这句台词分享给搭子。"
+                        : "分享了一句台词给你。")}
+                  </p>
+                </div>
+                <div className="share-thread-list" role="list">
+                  {(detailShare.replies || []).length ? (
+                    (detailShare.replies || []).map((reply) => (
+                      <div className="share-thread-item" role="listitem" key={reply.id}>
+                        <div className="share-thread-item-head">
+                          <strong>{reply.sender_profile?.nickname || reply.sender_username}</strong>
+                          <span>{formatDate(reply.created_at)}</span>
+                        </div>
+                        <p>{(reply.comment || "").trim() || "评论"}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="empty tiny">暂无回复，做第一个评论的人吧。</div>
+                  )}
+                </div>
+                <div className="share-reply-box share-reply-box-expanded share-reply-box-modal">
+                  <input
+                    value={replyDraftByShare[detailShare.id] || ""}
+                    placeholder="回复这条分享"
+                    onChange={(event) => setReplyDraftByShare((current) => ({ ...current, [detailShare.id]: event.target.value }))}
+                  />
+                  <button type="button" className="icon-button share-tool-btn" title="发送回复" disabled={partnerBusy} onClick={() => onReplyShare(detailShare.id)}>
+                    <Send size={16} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
     );
   }

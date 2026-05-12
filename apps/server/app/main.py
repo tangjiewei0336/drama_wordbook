@@ -13,9 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 try:
@@ -320,7 +321,17 @@ def _save_share_screenshot(data: str) -> str:
     return name
 
 
+def _share_screenshot_media_path(stored_filename: str) -> str:
+    """Public URL path (no auth); basename must stay unguessable."""
+    basename = Path(str(stored_filename or "").strip()).name
+    if not basename:
+        return ""
+    return f"/media/share-screenshots/{basename}"
+
+
 def _share_to_response(row: dict, replies: list[dict] | None = None) -> dict:
+    shot_name = str(row.get("screenshot_path") or "").strip()
+    media_path = _share_screenshot_media_path(shot_name) if shot_name else ""
     payload = {
         "id": int(row["id"]),
         "sentence": json.loads(row["sentence_json"] or "{}"),
@@ -329,11 +340,60 @@ def _share_to_response(row: dict, replies: list[dict] | None = None) -> dict:
         "sender_username": row["sender_username"],
         "sender_profile": json.loads(row["sender_profile"] or "{}"),
         "parent_share_id": int(row.get("parent_share_id") or 0),
-        "has_screenshot": bool(str(row.get("screenshot_path") or "").strip()),
+        "has_screenshot": bool(shot_name),
+        "screenshot_media_url": media_path or None,
     }
     if replies is not None:
         payload["replies"] = replies
     return payload
+
+
+MAX_SHARE_UPLOAD_BYTES = 12 * 1024 * 1024
+
+
+def _validated_upload_basename(candidate: str) -> str | None:
+    raw = str(candidate or "").strip()
+    if not raw or "/" in raw or "\\" in raw:
+        return None
+    if Path(raw).name != raw:
+        return None
+    path = (SHARE_SCREENSHOT_DIR / raw).resolve()
+    root = SHARE_SCREENSHOT_DIR.resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    if path.is_file():
+        return raw
+    return None
+
+
+def _resolve_share_upload_screenshot(payload: SharePayload) -> str:
+    """Prefer multipart upload reference, then inline base64."""
+    trimmed = str(payload.screenshot_stored_as or "").strip()
+    if trimmed:
+        ok = _validated_upload_basename(trimmed)
+        if ok:
+            return ok
+    return _save_share_screenshot(payload.screenshot_base64)
+
+
+def _bytes_look_like_image(blob: bytes) -> bool:
+    if len(blob) < 24:
+        return False
+    if blob.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if blob.startswith(b"\xff\xd8\xff"):
+        return True
+    return blob.startswith(b"RIFF") and b"WEBP" in blob[:24]
+
+
+def _image_ext_for_blob(blob: bytes) -> str:
+    if blob.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if blob.startswith(b"RIFF"):
+        return ".webp"
+    return ".png"
 
 
 SYNC_ENTITY_TYPES = ("sentences", "vocab_items")
@@ -531,6 +591,10 @@ class SharePayload(BaseModel):
     sentence: dict = Field(default_factory=dict)
     comment: str = ""
     screenshot_base64: str = ""
+    screenshot_stored_as: str = Field(
+        default="",
+        description="Basename returned by POST /upload/share-screenshot (optional alternative to screenshot_base64).",
+    )
     parent_share_id: int = 0
 
 
@@ -552,13 +616,20 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
+)
+SHARE_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/media/share-screenshots",
+    StaticFiles(directory=str(SHARE_SCREENSHOT_DIR)),
+    name="share_screenshots_media",
 )
 
 
 @app.on_event("startup")
 def startup() -> None:
+    SHARE_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
 
 
@@ -581,6 +652,31 @@ def require_admin(
     if not provided or not hmac.compare_digest(provided, ADMIN_TOKEN):
         raise HTTPException(status_code=403, detail="invalid admin token")
     return True
+
+
+@app.post("/upload/share-screenshot")
+async def upload_share_screenshot(
+    file: UploadFile = File(...),
+    _user: sqlite3.Row = Depends(current_user),
+):
+    """
+    Multipart upload for share thumbnails. Caller then passes `stored_as`
+    into POST /shares as screenshot_stored_as, or relies on screenshot_base64.
+    """
+    blob = await file.read()
+    if len(blob) < 80 or len(blob) > MAX_SHARE_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="screenshot payload size invalid")
+    if not _bytes_look_like_image(blob):
+        raise HTTPException(status_code=400, detail="unsupported image format")
+    ext = _image_ext_for_blob(blob)
+    name = f"{secrets.token_hex(16)}{ext}"
+    dest = SHARE_SCREENSHOT_DIR / name
+    try:
+        dest.write_bytes(blob)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="failed to store file") from exc
+    url = _share_screenshot_media_path(name)
+    return {"ok": True, "stored_as": name, "url": url}
 
 
 @app.get("/health")
@@ -1107,7 +1203,7 @@ def share_sentence(payload: SharePayload, user: sqlite3.Row = Depends(current_us
                 int(recipient["id"]),
                 json.dumps(payload.sentence, ensure_ascii=False),
                 payload.comment.strip(),
-                _save_share_screenshot(payload.screenshot_base64),
+                _resolve_share_upload_screenshot(payload),
                 max(0, int(payload.parent_share_id or 0)) or None,
                 utc_now(),
             ),

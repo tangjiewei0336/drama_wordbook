@@ -113,8 +113,8 @@
         <label for="sidecarBaseUrl">本地 sidecar 地址（Drama Wordbook HTTP）</label>
         <input id="sidecarBaseUrl" type="text" spellcheck="false" autocomplete="off" />
         <div class="hint">
-          插件通过 <strong>http</strong> 连本机的 sidecar（默认端口 <strong>17321</strong>），不直接连 Electron 窗口；请先<strong>启动桌面 Drama Wordbook</strong>并保持 Sidecar 在线。<br />默认
-          <code>http://127.0.0.1:17321</code>。若改用 <code>http://localhost:17321</code> 也能连同一服务。修改为非本机回环地址时保存会弹出权限请求。
+          插件通过 <strong>http</strong> 连本机的 sidecar（默认端口 <strong>17321</strong>），不直接连 Electron 窗口；请先<strong>启动桌面 Drama Wordbook</strong>并保持 Sidecar 在线。<br />默认推荐
+          <code>http://127.0.0.1:17321</code>。若填写 <code>localhost</code>，部分系统会优先走 IPv6 导致连不上；保存时会自动改成 <code>127.0.0.1</code>。修改为非本机回环地址时保存会弹出权限请求。
         </div>
       </div>
       <div class="row">

@@ -172,6 +172,8 @@ export type DramaSpace = {
     sender_profile: Partial<Profile>;
     parent_share_id?: number;
     has_screenshot?: boolean;
+    /** 同步服务器上的公开静态路径，供 <img> 直接加载（需与 server_url 拼接）。 */
+    screenshot_media_url?: string | null;
     replies?: Array<{
       id: number;
       sentence: SentenceRecord;
@@ -181,6 +183,7 @@ export type DramaSpace = {
       sender_profile: Partial<Profile>;
       parent_share_id?: number;
       has_screenshot?: boolean;
+      screenshot_media_url?: string | null;
     }>;
   }>;
   recent_share_comments?: Array<{ id: number; comment: string; created_at: string }>;
@@ -485,6 +488,20 @@ export function sentenceScreenshotUrl(sentenceId: number): string {
   return `${SIDECAR_BASE}/sentences/${sentenceId}/screenshot`;
 }
 
-export function shareScreenshotUrl(shareId: number): string {
-  return `${SIDECAR_BASE}/shares/${shareId}/screenshot`;
+/** 同步服务器根地址，不含尾部斜杠（与登录配置一致）。 */
+function normalizedSyncServerBase(raw: string): string {
+  const t = String(raw || "").trim().replace(/\/+$/, "");
+  return t;
+}
+
+export function shareScreenshotUrl(
+  share: { id: number; screenshot_media_url?: string | null },
+  serverUrl: string,
+): string {
+  const mediaPath = String(share?.screenshot_media_url || "").trim();
+  const base = normalizedSyncServerBase(serverUrl);
+  if (base && mediaPath.startsWith("/")) {
+    return `${base}${mediaPath}`;
+  }
+  return `${SIDECAR_BASE}/shares/${share.id}/screenshot`;
 }
