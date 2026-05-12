@@ -275,3 +275,45 @@ class AsrTranscribeResponse(BaseModel):
     duration: float
     text: str
     chunks: list[AsrChunk]
+
+
+# ---- 百词斩复习 ----
+
+
+class ReviewStartRequest(BaseModel):
+    calendar_day: str = Field(..., description="客户端本地日期 YYYY-MM-DD")
+    question_limit: int = 20
+
+
+class ReviewStartResponse(BaseModel):
+    session_id: str = ""
+    resumed: bool = False
+    calendar_day: str = ""
+    cursor: int = 0
+    total: int = 0
+    current: dict | None = None
+    completed: bool = False
+    empty_reason: str = ""
+
+
+class ReviewAnswerRequest(BaseModel):
+    session_id: str
+    calendar_day: str
+    choice_index: int | None = None
+    text: str | None = None
+    order_piece_ids: list[str] | None = None
+
+
+class ReviewAnswerResponse(BaseModel):
+    done: bool = False
+    correct: bool = False
+    current: dict | None = None
+    hint_reading_after_wrong: bool = False
+    reading_stage: str = ""
+    head_state: dict = Field(default_factory=dict)
+    advanced: bool | None = None
+
+
+class ReviewSnapshotResponse(BaseModel):
+    eligible_heads: int = 0
+    mastered_heads: int = 0

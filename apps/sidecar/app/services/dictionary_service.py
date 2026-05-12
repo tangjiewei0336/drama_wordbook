@@ -34,6 +34,37 @@ def _looks_invalid_zh(text: str) -> bool:
     return False
 
 
+_ZH_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def meaning_looks_chinese(text: str) -> bool:
+    """释义是否以中文为主（用于复习选择题只展示中文）。"""
+    s = (text or "").strip()
+    if not s:
+        return False
+    zh = len(_ZH_CHAR_RE.findall(s))
+    total = len(s)
+    if zh >= 2 and zh / max(total, 1) >= 0.22:
+        return True
+    return zh >= 1 and total <= 4 and zh / max(total, 1) >= 0.35
+
+
+def ensure_meaning_chinese(text: str) -> str:
+    """将单条释义尽量规范为中文；已是中文则原样返回。"""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    if meaning_looks_chinese(raw):
+        return raw
+    zh = _translate_ja_to_zh(raw)
+    if zh:
+        return zh
+    zh2 = _translate_en_to_zh(raw)
+    if zh2:
+        return zh2
+    return raw
+
+
 @lru_cache(maxsize=4096)
 def _translate_ja_to_zh(text: str) -> str:
     q = (text or "").strip()
