@@ -42,10 +42,10 @@ jobs:
         include:
           - name: macos
             os: macos-latest
-            npm-script: dist:mac
+            electron-builder-args: "--mac --publish never"
           - name: windows
             os: windows-latest
-            npm-script: dist:win
+            electron-builder-args: "--win --x64 --publish never"
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -81,9 +81,11 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # Do not publish from electron-builder here: publish-release uses gh CLI with github.token.
+      # Without GH_TOKEN, builder would fail when CI + draft release triggers GitHubPublisher.
       - name: Build desktop package
         working-directory: apps/desktop
-        run: npm run ${{ matrix.npm-script }}
+        run: npm run build && npx electron-builder ${{ matrix.electron-builder-args }}
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
