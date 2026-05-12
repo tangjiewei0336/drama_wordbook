@@ -5,6 +5,7 @@
   "description": "Capture Bilibili frame and send OCR request to local sidecar.",
   "permissions": ["activeTab", "tabs", "scripting", "storage"],
   "host_permissions": [
+    "https://*.bilibili.com/*",
     "https://www.bilibili.com/*",
     "http://127.0.0.1:17321/*",
     "http://localhost:17321/*"
@@ -21,7 +22,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.bilibili.com/*"],
+      "matches": ["https://*.bilibili.com/*", "https://www.bilibili.com/*"],
       "css": ["src/overlay.css"],
       "js": ["src/overlay.js", "src/content.js"],
       "run_at": "document_idle"

@@ -1,14 +1,36 @@
 import { addRecentWords, getRecentWords, getSettings, removeRecentWordByVocabItemId } from "./storage.js";
 
+function shortenForUi(text, maxLen = 220) {
+  const s = String(text ?? "").trim();
+  if (!s) return "";
+  return s.length > maxLen ? `${s.slice(0, maxLen)}…` : s;
+}
+
+function formatPipelineFailure(error) {
+  return shortenForUi(String(error?.message || error || "未知错误"));
+}
+
 async function fetchSidecar(path, init) {
   const { sidecarBaseUrl } = await getSettings();
-  return fetch(`${sidecarBaseUrl}${path}`, init);
+  const url = `${sidecarBaseUrl}${path}`;
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const cause = error?.cause && typeof error.cause === "object" && error.cause?.message;
+    const detail = cause || String(error?.message || error);
+    throw new Error(
+      `无法连接 Sidecar（${sidecarBaseUrl}）：${detail}。若桌面端显示已启动，请在浏览器打开 ${sidecarBaseUrl}/health 检查服务是否响应。`
+    );
+  }
 }
 let lastCaptureResult = null;
 let captureLock = false;
 let captureLockStartedAt = 0;
 let asrRunning = false;
-let asrTranscribing = false;
+/** Serial drain of ASR audio chunks (MediaRecorder emits on a fixed cadence faster than Whisper). */
+let asrChunkQueue = [];
+let asrDrainRunning = false;
+const ASR_CHUNK_QUEUE_CAP = 12;
 let recentAsrResults = [];
 let asrAudioLevel = 0;
 let asrAudioLevelUpdatedAt = "";
@@ -169,50 +191,54 @@ async function setAutoJlptLevels(levels) {
 }
 
 async function getPlaybackContext(tabId) {
-  const injection = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      const video = document.querySelector("video");
-      const titleEl =
-        document.querySelector("h1.video-title") ||
-        document.querySelector("h1");
-      const activePartEl =
-        document.querySelector(".cur-list .on .part, .cur-list .on, .video-pod__item.active, .video-pod__item--active, .video-sections-item.active") ||
-        document.querySelector("[class*='video-pod'] [class*='active']");
-      const partText = activePartEl?.textContent?.trim() || "";
-      const partIndexAttr =
-        activePartEl?.getAttribute("data-index") ||
-        activePartEl?.getAttribute("data-idx") ||
-        activePartEl?.getAttribute("data-p") ||
-        "";
-      const partIndexMatch = partText.match(/(?:P|p|第)?\s*(\d+)\s*(?:集|话|話|P)?/);
-      const urlP = new URL(window.location.href).searchParams.get("p");
-      const inferredP = Number(urlP || partIndexAttr || (partIndexMatch ? partIndexMatch[1] : 0)) || null;
-      const rect = video ? video.getBoundingClientRect() : null;
-      return {
-        url: window.location.href,
-        title: titleEl ? titleEl.textContent.trim() : document.title,
-        part_title: partText,
-        p: inferredP,
-        current_time: video ? Number(video.currentTime || 0) : 0,
-        duration: video ? Number(video.duration || 0) : 0,
-        video_rect: rect
-          ? {
-              x: Number(rect.left || 0),
-              y: Number(rect.top || 0),
-              width: Number(rect.width || 0),
-              height: Number(rect.height || 0)
-            }
-          : null,
-        viewport: {
-          width: Number(window.innerWidth || 0),
-          height: Number(window.innerHeight || 0)
-        }
-      };
-    }
-  });
-
-  return injection?.[0]?.result || null;
+  try {
+    const injection = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const video = document.querySelector("video");
+        const titleEl =
+          document.querySelector("h1.video-title") ||
+          document.querySelector("h1");
+        const activePartEl =
+          document.querySelector(".cur-list .on .part, .cur-list .on, .video-pod__item.active, .video-pod__item--active, .video-sections-item.active") ||
+          document.querySelector("[class*='video-pod'] [class*='active']");
+        const partText = activePartEl?.textContent?.trim() || "";
+        const partIndexAttr =
+          activePartEl?.getAttribute("data-index") ||
+          activePartEl?.getAttribute("data-idx") ||
+          activePartEl?.getAttribute("data-p") ||
+          "";
+        const partIndexMatch = partText.match(/(?:P|p|第)?\s*(\d+)\s*(?:集|话|話|P)?/);
+        const urlP = new URL(window.location.href).searchParams.get("p");
+        const inferredP = Number(urlP || partIndexAttr || (partIndexMatch ? partIndexMatch[1] : 0)) || null;
+        const rect = video ? video.getBoundingClientRect() : null;
+        return {
+          url: window.location.href,
+          title: titleEl ? titleEl.textContent.trim() : document.title,
+          part_title: partText,
+          p: inferredP,
+          current_time: video ? Number(video.currentTime || 0) : 0,
+          duration: video ? Number(video.duration || 0) : 0,
+          video_rect: rect
+            ? {
+                x: Number(rect.left || 0),
+                y: Number(rect.top || 0),
+                width: Number(rect.width || 0),
+                height: Number(rect.height || 0)
+              }
+            : null,
+          viewport: {
+            width: Number(window.innerWidth || 0),
+            height: Number(window.innerHeight || 0)
+          }
+        };
+      }
+    });
+    return injection?.[0]?.result || null;
+  } catch (error) {
+    const last = chrome.runtime.lastError?.message;
+    throw new Error(last || String(error?.message || error));
+  }
 }
 
 async function postPlaybackContext(payload) {
@@ -222,7 +248,10 @@ async function postPlaybackContext(payload) {
     body: JSON.stringify(payload)
   });
   if (!res.ok) {
-    throw new Error(`playback/context failed: ${res.status}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Sidecar playback/context 失败（HTTP ${res.status}）${text ? `：${shortenForUi(text, 180)}` : ""}`
+    );
   }
   return res.json();
 }
@@ -415,10 +444,56 @@ async function postAsrTranscribe(audioBase64) {
 
 function stopAsrState(reason = "") {
   asrRunning = false;
-  asrTranscribing = false;
+  asrChunkQueue.length = 0;
   asrAudioLevel = 0;
   asrAudioLevelUpdatedAt = new Date().toISOString();
   return reason;
+}
+
+async function drainAsrChunks() {
+  if (!asrRunning || asrDrainRunning) return;
+  asrDrainRunning = true;
+  try {
+    while (asrRunning && asrChunkQueue.length) {
+      const audioBase64 = asrChunkQueue.shift();
+      if (!audioBase64 || audioBase64.length < 500) continue;
+      try {
+        const asr = await postAsrTranscribe(String(audioBase64));
+        if (asr?.text) {
+          let savedCount = 0;
+          try {
+            const tab = await getActiveBilibiliTab();
+            const playbackRes = await syncPlaybackContextFromTab(tab.id);
+            const frameDataUrl = await captureVideoFrameDataUrl(tab.id);
+            const allowedJlptLevels = await getAutoJlptLevels();
+            const { words } = await saveTokensAsVocab({
+              text: asr.text,
+              screenshotBase64: frameDataUrl ? dataUrlToBase64(frameDataUrl) : null,
+              playback: playbackRes.playback,
+              allowedJlptLevels
+            });
+            savedCount = words.length;
+          } catch (error) {
+            console.warn("[wordbook] ASR auto-save failed", error);
+          }
+          recentAsrResults.unshift({
+            text: asr.text,
+            created_at: new Date().toISOString(),
+            duration: asr.duration,
+            saved_count: savedCount
+          });
+          recentAsrResults = recentAsrResults.slice(0, 20);
+          await broadcastStatus("processing", `ASR 自动记录 ${savedCount} 个词`);
+        }
+      } catch (error) {
+        await broadcastStatus("error", "语音识别失败");
+        console.warn("[wordbook] ASR transcribe failed", error);
+      }
+    }
+  } finally {
+    asrDrainRunning = false;
+    if (asrRunning && asrChunkQueue.length) void drainAsrChunks();
+  }
 }
 
 async function captureFrameDataUrl() {
@@ -584,7 +659,8 @@ async function showOverlay(tabId, payload) {
     payload
   });
   if (!res?.ok) {
-    throw new Error("页面内弹窗未能显示");
+    const detail = res?.error ? String(res.error) : "";
+    throw new Error(detail ? `页面内弹窗未能显示：${detail}` : "页面内弹窗未能显示");
   }
 }
 
@@ -859,7 +935,9 @@ chrome.commands.onCommand.addListener((command) => {
   if (command !== "capture-ocr-pipeline") return;
   runCapturePipeline("chrome_command").catch((error) => {
     releaseCaptureLock();
-    broadcastStatus("error", "触发失败").catch(() => {});
+    const msg = formatPipelineFailure(error);
+    console.error("[wordbook] capture pipeline failed (command)", error);
+    broadcastStatus("error", msg ? `触发失败：${msg}` : "触发失败").catch(() => {});
     lastCaptureResult = {
       ok: false,
       action: "capture_pipeline",
@@ -1002,7 +1080,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse(result);
       } catch (error) {
         releaseCaptureLock();
-        await broadcastStatus("error", "处理失败");
+        const msg = formatPipelineFailure(error);
+        console.error("[wordbook] capture pipeline failed (message)", error);
+        await broadcastStatus("error", msg ? `处理失败：${msg}` : "处理失败");
         throw error;
       }
       return;
@@ -1077,46 +1157,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "POC_ASR_AUDIO_CHUNK") {
-      if (!asrRunning || asrTranscribing) {
+      if (!asrRunning) {
         sendResponse({ ok: true, skipped: true });
         return;
       }
-      asrTranscribing = true;
-      try {
-        const asr = await postAsrTranscribe(String(message?.audio_base64 || ""));
-        if (asr?.text) {
-          let savedCount = 0;
-          try {
-            const tab = await getActiveBilibiliTab();
-            const playbackRes = await syncPlaybackContextFromTab(tab.id);
-            const frameDataUrl = await captureVideoFrameDataUrl(tab.id);
-            const allowedJlptLevels = await getAutoJlptLevels();
-            const { words } = await saveTokensAsVocab({
-              text: asr.text,
-              screenshotBase64: frameDataUrl ? dataUrlToBase64(frameDataUrl) : null,
-              playback: playbackRes.playback,
-              allowedJlptLevels
-            });
-            savedCount = words.length;
-          } catch (error) {
-            console.warn("[wordbook] ASR auto-save failed", error);
-          }
-          recentAsrResults.unshift({
-            text: asr.text,
-            created_at: new Date().toISOString(),
-            duration: asr.duration,
-            saved_count: savedCount
-          });
-          recentAsrResults = recentAsrResults.slice(0, 20);
-          await broadcastStatus("processing", `ASR 自动记录 ${savedCount} 个词`);
-        }
-        sendResponse({ ok: true });
-      } catch (error) {
-        await broadcastStatus("error", "语音识别失败");
-        sendResponse({ ok: false, error: String(error?.message || error) });
-      } finally {
-        asrTranscribing = false;
+      const audioBase64 = String(message?.audio_base64 || "");
+      if (audioBase64.length < 500) {
+        sendResponse({ ok: true, skipped: true });
+        return;
       }
+      asrChunkQueue.push(audioBase64);
+      while (asrChunkQueue.length > ASR_CHUNK_QUEUE_CAP) {
+        asrChunkQueue.shift();
+      }
+      sendResponse({ ok: true, queued: true });
+      void drainAsrChunks();
       return;
     }
 
