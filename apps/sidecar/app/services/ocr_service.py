@@ -3,11 +3,33 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import re
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+
+def _ensure_paddleocr_base_dir() -> None:
+    """PaddleOCR 在首次 import 时读取 PADDLE_OCR_BASE_DIR；默认 ~/.paddleocr 在无写 HOME 时会失败。"""
+    explicit = (
+        os.environ.get("DRAMA_WORDBOOK_PADDLEOCR_HOME")
+        or os.environ.get("PADDLE_OCR_BASE_DIR")
+        or ""
+    ).strip()
+    if explicit:
+        base = Path(explicit).expanduser().resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        os.environ["PADDLE_OCR_BASE_DIR"] = str(base) + os.sep
+        return
+    root = Path(__file__).resolve().parent.parent / "data" / "paddleocr"
+    root.mkdir(parents=True, exist_ok=True)
+    os.environ["PADDLE_OCR_BASE_DIR"] = str(root) + os.sep
+
+
+_ensure_paddleocr_base_dir()
 
 try:
     from paddleocr import PaddleOCR
@@ -39,14 +61,14 @@ def get_ocr_engine():
     if PaddleOCR is None:
         return None
     try:
-        # lang="ch" contains Chinese and can often handle Japanese subtitles in practice.
-        return PaddleOCR(use_angle_cls=True, lang="ch")
+        # PaddleOCR 2.x: PP-OCR + angle classifier; show_log=False keeps stderr quiet.
+        return PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
     except Exception as exc:  # pragma: no cover - env specific
-        logger.exception("PaddleOCR initialization failed (%s)", exc)
+        logger.exception("PaddleOCR initialization failed")
         raise RuntimeError(
-            "OCR engine failed to start (missing PaddleX/OpenCV OCR deps?). "
-            "Reinstall sidecar deps: pip install -e 'apps/sidecar' and ensure "
-            "paddlex[ocr-core] is installed."
+            f"PaddleOCR failed to start: {type(exc).__name__}: {exc}. "
+            "If using a venv, reinstall: cd apps/sidecar && pip install -e . "
+            "(expects paddleocr>=2.10,<3 and paddlepaddle)."
         ) from exc
 
 

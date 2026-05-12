@@ -98,8 +98,7 @@ jobs:
             apps/desktop/release/*.AppImage
             apps/desktop/release/*.deb
             apps/desktop/release/*.rpm
-            !apps/desktop/release/builder-*.yml
-            !apps/desktop/release/latest*.yml
+            apps/desktop/release/latest*.yml
           if-no-files-found: error
 
   publish-release:

@@ -418,6 +418,29 @@ function stopSidecar() {
   }
 }
 
+/** GitHub Releases auto-update (electron-updater). Requires packaged build + version bump per release. Disable: DRAMA_WORDBOOK_NO_AUTO_UPDATE=1 */
+function setupGithubAutoUpdater() {
+  if (process.env.DRAMA_WORDBOOK_NO_AUTO_UPDATE === "1") return;
+  if (!app.isPackaged || useDevServer) return;
+  try {
+    const { autoUpdater } = require("electron-updater");
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.logger = {
+      info: (...args) => console.log("[updater]", ...args),
+      warn: (...args) => console.warn("[updater]", ...args),
+      error: (...args) => console.error("[updater]", ...args),
+      debug: (...args) => console.debug("[updater]", ...args),
+    };
+    void autoUpdater.checkForUpdatesAndNotify();
+    setInterval(() => {
+      void autoUpdater.checkForUpdatesAndNotify();
+    }, 8 * 60 * 60 * 1000);
+  } catch (error) {
+    console.warn("[updater] init failed:", error?.message || error);
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -484,6 +507,7 @@ app.whenReady().then(() => {
   startHealthLoop();
   startSharePollLoop();
   createWindow();
+  setupGithubAutoUpdater();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

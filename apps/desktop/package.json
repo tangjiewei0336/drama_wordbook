@@ -18,6 +18,7 @@
     "dist:win": "npm run build && electron-builder --win --x64"
   },
   "dependencies": {
+    "electron-updater": "^6.8.3",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -55,11 +56,27 @@
       "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.education"
     },
     "win": {
-      "target": ["nsis", "zip"]
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "tangjiewei0336",
+      "repo": "drama_wordbook",
+      "releaseType": "release"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tangjiewei0336/drama_wordbook.git"
   }
 }

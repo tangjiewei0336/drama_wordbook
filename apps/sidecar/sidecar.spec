@@ -17,19 +17,15 @@ hiddenimports += collect_submodules("fastapi")
 hiddenimports += collect_submodules("pydantic")
 hiddenimports += collect_submodules("sudachipy")
 hiddenimports += collect_submodules("pyopenjtalk")
-hiddenimports += collect_submodules("paddlex")
-# PaddleX OCR pulls OpenCV / helpers dynamically; PyInstaller often misses them.
-for _ocr_hid in ("cv2", "yaml", "shapely", "shapely.geometry", "pyclipper"):
+# PaddleOCR 2.x + OpenCV / geometry helpers (often dynamic imports in frozen builds).
+for _ocr_hid in ("cv2", "yaml", "shapely", "shapely.geometry", "pyclipper", "skimage", "skimage.morphology"):
     hiddenimports.append(_ocr_hid)
 
 datas = []
 datas += collect_data_files("sudachidict_core")
 datas += collect_data_files("pyopenjtalk")
-# PaddleOCR 3.x (PaddleX pipelines) ships YAML/offline configs as package data.
-# Without these, PyInstaller builds raise at runtime:
-# "The pipeline (OCR) does not exist! Please use a pipeline name or a config file path!"
+# PaddleOCR package data / models metadata for frozen builds (2.x PP-OCR).
 datas += collect_data_files("paddleocr")
-datas += collect_data_files("paddlex")
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]
 
 a = Analysis(

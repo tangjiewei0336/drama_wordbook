@@ -15,5 +15,7 @@ apps/sidecar/build/
 
 # Local captured photos/screenshots
 apps/sidecar/app/data/screenshots/
+# PaddleOCR downloaded weights (several MB+)
+apps/sidecar/app/data/paddleocr/
 db.sqlite3
 *.sqlite3
