@@ -5,11 +5,14 @@ import io
 import logging
 import os
 import re
+import traceback
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+logger = logging.getLogger("wordbook.sidecar.ocr")
 
 
 def _ensure_paddleocr_base_dir() -> None:
@@ -31,16 +34,51 @@ def _ensure_paddleocr_base_dir() -> None:
 
 _ensure_paddleocr_base_dir()
 
+# Surface the real import error (missing wheel, broken hidden import, ABI mismatch …)
+# instead of swallowing it and showing the generic "not available" message later.
+_PADDLEOCR_IMPORT_ERROR: str = ""
+_PADDLEOCR_IMPORT_TRACEBACK: str = ""
+
+
+def _write_ocr_import_error_to_disk(message: str, tb: str) -> None:
+    """Best-effort log to a stable on-disk path so packaged builds still leave a trace."""
+    try:
+        root = Path(__file__).resolve().parent.parent / "data"
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / "ocr_import_error.log").open("w", encoding="utf-8") as fh:
+            fh.write(message + "\n\n")
+            fh.write(tb)
+    except Exception:
+        # Never let logging crash the sidecar boot.
+        pass
+
+
 try:
-    from paddleocr import PaddleOCR
-except Exception:  # pragma: no cover - dependency runtime check
-    PaddleOCR = None
+    from paddleocr import PaddleOCR  # type: ignore[assignment]
+except Exception as _ocr_import_exc:  # pragma: no cover - dependency runtime check
+    PaddleOCR = None  # type: ignore[assignment]
+    _PADDLEOCR_IMPORT_ERROR = f"{type(_ocr_import_exc).__name__}: {_ocr_import_exc}"
+    _PADDLEOCR_IMPORT_TRACEBACK = traceback.format_exc()
+    logger.exception("PaddleOCR import failed; OCR endpoint will return 500")
+    try:
+        traceback.print_exc()
+    except Exception:
+        pass
+    _write_ocr_import_error_to_disk(_PADDLEOCR_IMPORT_ERROR, _PADDLEOCR_IMPORT_TRACEBACK)
+
+
+def get_paddleocr_import_traceback() -> str:
+    return _PADDLEOCR_IMPORT_TRACEBACK
+
+
+def get_paddleocr_import_error() -> str:
+    """Expose the import-time error string (for /health and clearer 500 detail)."""
+    return _PADDLEOCR_IMPORT_ERROR
 
 
 JA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 ZH_RE = re.compile(r"[\u4e00-\u9fff]")
 MAX_IMAGE_SIDE = 1280
-logger = logging.getLogger("wordbook.sidecar.ocr")
 
 
 def _split_lang_lines(lines: list[str]) -> tuple[list[str], list[str]]:
@@ -174,8 +212,12 @@ def run_ocr(
 ) -> tuple[list[str], list[str], list[dict]]:
     engine = get_ocr_engine()
     if engine is None:
+        detail = _PADDLEOCR_IMPORT_ERROR or "module import returned None"
         raise RuntimeError(
-            "PaddleOCR is not available. Install dependencies in apps/sidecar first."
+            "PaddleOCR is not available ("
+            + detail
+            + "). 若是 dev 环境，请在 apps/sidecar 下执行 `pip install -e .`；"
+            + "若是打包版本，请检查侧车日志里 PaddleOCR / paddlepaddle 的 import 错误。"
         )
 
     image = decode_base64_image(image_base64)

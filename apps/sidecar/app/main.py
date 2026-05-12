@@ -58,7 +58,11 @@ from app.services.asr_service import (
     start_asr_model_load,
     transcribe_audio_chunk,
 )
-from app.services.ocr_service import run_ocr
+from app.services.ocr_service import (
+    get_paddleocr_import_error,
+    get_paddleocr_import_traceback,
+    run_ocr,
+)
 from app.services.tokenizer_service import tokenize_ja
 from app.services.review_service import evaluate_answer as review_evaluate_answer
 from app.services.review_service import review_snapshot as review_snapshot_service
@@ -131,11 +135,17 @@ def on_startup():
 
 @app.get("/health")
 def health():
+    ocr_import_error = get_paddleocr_import_error()
     return {
         "status": "ok",
         "service": "drama-wordbook-sidecar",
         "time": datetime.now(timezone.utc).isoformat(),
         "asr": get_asr_status(),
+        "ocr": {
+            "available": not ocr_import_error,
+            "import_error": ocr_import_error or None,
+            "import_traceback": get_paddleocr_import_traceback() or None,
+        },
     }
 
 
