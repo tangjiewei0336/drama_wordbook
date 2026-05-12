@@ -1117,23 +1117,34 @@ def share_sentence(payload: SharePayload, user: sqlite3.Row = Depends(current_us
 
 @app.get("/shares/unread")
 def unread_shares(user: sqlite3.Row = Depends(current_user)):
+    """
+    Partner/share feed threads (not unread-only anymore): top-level roots where either side
+    is the current user, including threads the user started. Nested replies belong to roots
+    and must not surface as standalone cards (fixes header swapping to the replier).
+    """
+    uid = int(user["id"])
     with conn() as db:
         rows = [
             dict(row)
             for row in db.execute(
-            """
-            SELECT m.id, m.sentence_json, m.comment, m.created_at, m.parent_share_id, m.screenshot_path,
-                   u.username AS sender_username, u.profile_json AS sender_profile
-            FROM share_message m
-            JOIN "user" u ON u.id = m.sender_id
-            WHERE m.recipient_id = ? AND m.read_at IS NULL
-            ORDER BY m.id DESC
-            LIMIT 50
-            """,
-            (int(user["id"]),),
-        ).fetchall()
+                """
+                SELECT m.id, m.sentence_json, m.comment, m.created_at, m.parent_share_id, m.screenshot_path,
+                       u.username AS sender_username, u.profile_json AS sender_profile,
+                       COALESCE(
+                         (SELECT MAX(c.created_at) FROM share_message c WHERE c.parent_share_id = m.id),
+                         m.created_at
+                       ) AS sort_ts
+                FROM share_message m
+                JOIN "user" u ON u.id = m.sender_id
+                WHERE (m.parent_share_id IS NULL OR m.parent_share_id = 0)
+                  AND (m.sender_id = ? OR m.recipient_id = ?)
+                ORDER BY sort_ts DESC, m.id DESC
+                LIMIT 50
+                """,
+                (uid, uid),
+            ).fetchall()
         ]
-        share_ids = [int(row["id"]) for row in rows]
+        share_ids = [int(dict(row)["id"]) for row in rows]
         replies_by_parent: dict[int, list[dict]] = {}
         if share_ids:
             replies = [
@@ -1151,7 +1162,7 @@ def unread_shares(user: sqlite3.Row = Depends(current_user)):
                     """.format(
                         placeholders=",".join("?" for _ in share_ids)
                     ),
-                    (*share_ids, int(user["id"]), int(user["id"])),
+                    (*share_ids, uid, uid),
                 ).fetchall()
             ]
             for row in replies:
@@ -1159,12 +1170,12 @@ def unread_shares(user: sqlite3.Row = Depends(current_user)):
                 if parent_id <= 0:
                     continue
                 replies_by_parent.setdefault(parent_id, []).append(_share_to_response(row))
-    return {
-        "items": [
-            _share_to_response(row, replies_by_parent.get(int(row["id"]), []))
-            for row in rows
-        ]
-    }
+    items = []
+    for row in rows:
+        cleaned = dict(row)
+        cleaned.pop("sort_ts", None)
+        items.append(_share_to_response(cleaned, replies_by_parent.get(int(cleaned["id"]), [])))
+    return {"items": items}
 
 
 @app.get("/shares/recent-comments")

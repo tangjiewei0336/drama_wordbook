@@ -44,11 +44,8 @@
     ],
     "extraResources": [
       {
-        "from": "../sidecar/dist/",
-        "to": "sidecar",
-        "filter": [
-          "drama-wordbook-sidecar*"
-        ]
+        "from": "../sidecar/dist/drama-wordbook-sidecar",
+        "to": "sidecar"
       }
     ],
     "directories": {

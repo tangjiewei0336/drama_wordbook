@@ -162,6 +162,7 @@ export type DramaSpace = {
     created_at: string;
     to_username: string;
   }>;
+  /** Partner share threads: root shares you sent or received, with replies nested under `replies`. */
   unread_shares: Array<{
     id: number;
     sentence: SentenceRecord;
@@ -186,6 +187,9 @@ export type DramaSpace = {
 };
 
 export const SIDECAR_BASE = "http://127.0.0.1:17321";
+
+/** 留空或未填时使用；与云端 Nginx/README 示例一致（可用环境变量在 sidecar 侧覆盖）。 */
+export const DEFAULT_PUBLIC_SYNC_SERVER = "http://146.56.195.192";
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${SIDECAR_BASE}${path}`);
@@ -298,20 +302,22 @@ export async function updateSyncConfig(config: Pick<SyncConfig, "auto_sync_inter
 }
 
 export async function loginSync(serverUrl: string, username: string, password: string): Promise<SyncConfig> {
+  const resolvedUrl = String(serverUrl ?? "").trim() || DEFAULT_PUBLIC_SYNC_SERVER;
   const res = await fetch(`${SIDECAR_BASE}/sync/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ server_url: serverUrl, username, password }),
+    body: JSON.stringify({ server_url: resolvedUrl, username, password }),
   });
   if (!res.ok) throw new Error(await parseApiError(res, `登录失败（${res.status}）`));
   return (await res.json()) as SyncConfig;
 }
 
 export async function registerSync(serverUrl: string, username: string, password: string, inviteCode = ""): Promise<SyncConfig> {
+  const resolvedUrl = String(serverUrl ?? "").trim() || DEFAULT_PUBLIC_SYNC_SERVER;
   const res = await fetch(`${SIDECAR_BASE}/sync/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ server_url: serverUrl, username, password, invite_code: inviteCode }),
+    body: JSON.stringify({ server_url: resolvedUrl, username, password, invite_code: inviteCode }),
   });
   if (!res.ok) throw new Error(await parseApiError(res, `注册失败（${res.status}）`));
   return (await res.json()) as SyncConfig;

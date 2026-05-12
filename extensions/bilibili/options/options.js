@@ -1,6 +1,7 @@
-import { getSettings, updateSettings } from "../src/storage.js";
+import { getSettings, normalizeSidecarBaseUrl, updateSettings } from "../src/storage.js";
 
 const els = {
+  sidecarBaseUrl: document.getElementById("sidecarBaseUrl"),
   subtitleBandOnly: document.getElementById("subtitleBandOnly"),
   subtitleBandTopRatio: document.getElementById("subtitleBandTopRatio"),
   subtitleBandBottomRatio: document.getElementById("subtitleBandBottomRatio"),
@@ -21,11 +22,34 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+async function ensureSidecarHostPermission(originUrl) {
+  try {
+    const u = new URL(originUrl);
+    const loopback = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+    if (loopback) return { ok: true, skipped: true };
+    if (!chrome.permissions?.request || !chrome.permissions?.contains) {
+      return { ok: true, skipped: true };
+    }
+    const perm = { origins: [`${u.origin}/*`] };
+    const has = await chrome.permissions.contains(perm);
+    if (has) return { ok: true, skipped: true };
+    const granted = await chrome.permissions.request(perm);
+    return {
+      ok: granted,
+      skipped: false,
+      message: granted ? "" : "未授予插件访问该地址的权限，请求可能被浏览器拦截。"
+    };
+  } catch {
+    return { ok: false, skipped: false, message: "sidecar 地址格式无效。" };
+  }
+}
+
 function setStatus(text) {
   els.status.textContent = text || "";
 }
 
 function renderSettings(settings) {
+  els.sidecarBaseUrl.value = settings.sidecarBaseUrl || "";
   els.subtitleBandOnly.checked = settings.subtitleBandOnly;
   els.subtitleBandTopRatio.value = settings.subtitleBandTopRatio;
   els.subtitleBandBottomRatio.value = settings.subtitleBandBottomRatio;
@@ -56,6 +80,7 @@ function collectSettingsFromForm() {
   const bottom = clamp(Number(els.subtitleBandBottomRatio.value), 0, 1);
   const split = clamp(Number(els.subtitleSplitRatio.value), 0.2, 0.8);
   return {
+    sidecarBaseUrl: normalizeSidecarBaseUrl(els.sidecarBaseUrl.value),
     subtitleBandOnly: els.subtitleBandOnly.checked,
     subtitleBandTopRatio: top,
     subtitleBandBottomRatio: Math.max(top, bottom),
@@ -80,9 +105,17 @@ async function init() {
 
 els.saveBtn.addEventListener("click", async () => {
   try {
-    const saved = await updateSettings(collectSettingsFromForm());
+    const form = collectSettingsFromForm();
+    const perm = await ensureSidecarHostPermission(form.sidecarBaseUrl);
+    if (!perm.ok) {
+      setStatus(perm.message || "无法为该地址申请浏览器权限");
+      return;
+    }
+    const saved = await updateSettings(form);
     renderSettings(saved);
-    setStatus("保存成功");
+    let msg = "保存成功";
+    if (!perm.skipped && perm.message) msg += ` · ${perm.message}`;
+    setStatus(msg);
   } catch (error) {
     setStatus(`保存失败: ${String(error?.message || error)}`);
   }

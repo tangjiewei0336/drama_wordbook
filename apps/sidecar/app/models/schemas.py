@@ -105,6 +105,7 @@ class VocabAddItemsRequest(BaseModel):
 class VocabAddItemsResponse(BaseModel):
     head_ids: list[int]
     created_item_ids: list[int]
+    sentence_ids: list[int] = Field(default_factory=list)
 
 
 class VocabHead(BaseModel):
@@ -220,7 +221,7 @@ class DesktopSettingsUpdateRequest(BaseModel):
 
 
 class SyncLoginRequest(BaseModel):
-    server_url: str
+    server_url: str = ""
     username: str
     password: str
     invite_code: str = ""

@@ -5,6 +5,14 @@ function safeText(value) {
   return typeof value === "string" ? value : "";
 }
 
+function escapeHtml(value) {
+  return safeText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;");
+}
+
 function removeOverlay() {
   const existing = document.getElementById(OVERLAY_ROOT_ID);
   if (existing) existing.remove();
@@ -44,16 +52,6 @@ function rehomeOverlay() {
 
 document.addEventListener("fullscreenchange", rehomeOverlay);
 document.addEventListener("webkitfullscreenchange", rehomeOverlay);
-
-function calcCardPosition(videoRect) {
-  if (!videoRect || videoRect.width <= 0 || videoRect.height <= 0) {
-    return { left: 16, top: 16 };
-  }
-  const cardWidth = Math.min(520, window.innerWidth - 32);
-  const left = Math.max(16, Math.min(videoRect.x + videoRect.width - cardWidth - 12, window.innerWidth - cardWidth - 16));
-  const top = Math.max(16, Math.min(videoRect.y + 12, window.innerHeight - 240));
-  return { left, top };
-}
 
 async function loadOverlaySize() {
   try {
@@ -150,8 +148,8 @@ async function renderOverlay(payload) {
   const savedSize = await loadOverlaySize();
   if (savedSize.width) card.style.width = `${Math.min(savedSize.width, window.innerWidth - 32)}px`;
   if (savedSize.height) {
-    card.style.height = `${Math.min(savedSize.height, window.innerHeight - 32)}px`;
-    card.style.maxHeight = "none";
+    const capped = Math.min(savedSize.height, window.innerHeight - 32);
+    card.style.height = `${Math.max(360, capped)}px`;
   }
   installResizeHandles(card);
 
@@ -173,6 +171,23 @@ async function renderOverlay(payload) {
   const zhTextarea = createEl("textarea", "wb-overlay-textarea");
   zhTextarea.value = safeText(payload?.ocr?.zh_lines?.join(" "));
   zhSection.appendChild(zhTextarea);
+
+  let hasPartnerFromSpace = false;
+  let partnerUsername = "";
+  try {
+    const partnerRes = await chrome.runtime.sendMessage({ type: "POC_GET_SPACE_PARTNER" });
+    if (partnerRes?.ok) {
+      hasPartnerFromSpace = Boolean(partnerRes.has_partner);
+      partnerUsername = safeText(partnerRes.partner_username);
+    }
+  } catch {
+    hasPartnerFromSpace = false;
+  }
+
+  const moreToggle = createEl("button", "wb-btn wb-btn-default wb-overlay-more-toggle", "更多 ▼");
+  moreToggle.type = "button";
+  const extrasBody = createEl("div", "wb-overlay-extras-body");
+  extrasBody.style.display = "none";
 
   const tagSection = createEl("div", "wb-overlay-section");
   tagSection.appendChild(createEl("div", "wb-overlay-label", "句子 tag"));
@@ -217,6 +232,44 @@ async function renderOverlay(payload) {
   tagSection.appendChild(tagList);
   tagSection.appendChild(tagAddRow);
 
+  const shareSection = createEl("div", "wb-overlay-section wb-overlay-share-row");
+  const shareCheck = createEl("input");
+  shareCheck.type = "checkbox";
+  shareCheck.id = "wb-overlay-share-partner";
+  shareCheck.disabled = !hasPartnerFromSpace;
+  const shareLabelWrap = createEl("label", "wb-overlay-share-label");
+  shareLabelWrap.appendChild(shareCheck);
+  shareLabelWrap.appendChild(
+    createEl(
+      "span",
+      "",
+      hasPartnerFromSpace
+        ? `同时分享给我的搭子${partnerUsername ? ` (@${partnerUsername})` : ""}`
+        : "同时分享给我的搭子（未绑定搭子时不可用）"
+    )
+  );
+  shareSection.appendChild(shareLabelWrap);
+  const partnerCommentInput = createEl("textarea", "wb-overlay-textarea wb-overlay-partner-comment");
+  partnerCommentInput.placeholder = "给搭子的留言（可选）";
+  partnerCommentInput.disabled = true;
+  shareCheck.addEventListener("change", () => {
+    partnerCommentInput.disabled = !shareCheck.checked;
+  });
+  shareSection.appendChild(partnerCommentInput);
+
+  extrasBody.appendChild(tagSection);
+  extrasBody.appendChild(shareSection);
+
+  moreToggle.addEventListener("click", () => {
+    const open = extrasBody.style.display === "none";
+    extrasBody.style.display = open ? "flex" : "none";
+    moreToggle.textContent = open ? "更多 ▲" : "更多 ▼";
+  });
+
+  const moreWrap = createEl("div", "wb-overlay-section wb-overlay-more-wrap");
+  moreWrap.appendChild(moreToggle);
+  moreWrap.appendChild(extrasBody);
+
   const tokenSection = createEl("div", "wb-overlay-section");
   tokenSection.appendChild(createEl("div", "wb-overlay-label", "选择字符/词片段（可多选，自动拼接）"));
   const tokenList = createEl("div", "wb-overlay-token-list");
@@ -228,21 +281,44 @@ async function renderOverlay(payload) {
   if (tokens.length === 0) {
     tokenList.appendChild(createEl("div", "", "未识别到可用日语分词。"));
   } else {
+    const dictPreview = createEl("div", "wb-overlay-dict-preview wb-overlay-dict-panel");
+    dictPreview.innerHTML = '<span class="muted">词典查询结果将显示在这里</span>';
+    const readingHint = createEl("div", "wb-overlay-reading-hint muted", "");
+
     const composedWordInput = createEl("input", "wb-overlay-meaning-input");
-    composedWordInput.placeholder = "最终要添加的词（由上方选择自动拼接）";
+    composedWordInput.placeholder = "词形（由上方勾选自动填入，也可手改）";
     let composedEdited = false;
-    const dictPreview = createEl("div", "wb-overlay-dict-preview");
-    dictPreview.innerHTML = '<span class="muted">词典提示将显示在这里</span>';
+
+    const meaningInput = createEl("textarea", "wb-overlay-textarea wb-overlay-meaning-textarea");
+    meaningInput.placeholder = "释义（选词后会自动填入词典结果，可多行或用；分隔多条）";
+    let meaningEdited = false;
+    meaningInput.addEventListener("input", () => {
+      meaningEdited = true;
+    });
+
     let lookupSeq = 0;
     let lookupReading = "";
     let lookupDict = null;
+
+    const parseMeaningsField = () =>
+      meaningInput.value
+        .split(/[\n;；]/)
+        .map((s) => safeText(s).trim())
+        .filter(Boolean);
+
+    function applyDictMeaningsToField(dict) {
+      if (meaningEdited) return;
+      if (dict?.meanings?.length) {
+        meaningInput.value = dict.meanings.join("；");
+      } else {
+        meaningInput.value = "";
+      }
+    }
 
     composedWordInput.addEventListener("input", () => {
       composedEdited = true;
       refreshDictionaryPreview().catch(() => {});
     });
-
-    const readingHint = createEl("div", "wb-overlay-label", "");
 
     const getComposedTokenText = () =>
       Array.from(selectedIndices)
@@ -274,14 +350,14 @@ async function renderOverlay(payload) {
       const typedWord = composedWordInput.value.trim();
       const surfaceText = getComposedTokenText();
       const dictionaryForm = getComposedDictionaryForm();
-      const lookupCandidates = (composedEdited && typedWord)
-        ? [typedWord, surfaceText, dictionaryForm]
-        : [surfaceText, dictionaryForm, typedWord];
+      const lookupCandidates = composedEdited && typedWord ? [typedWord, surfaceText, dictionaryForm] : [surfaceText, dictionaryForm, typedWord];
       if (!lookupCandidates.some((value) => safeText(value).trim())) {
         lookupReading = "";
         lookupDict = null;
         readingHint.textContent = "";
-        dictPreview.innerHTML = '<span class="muted">词典提示将显示在这里</span>';
+        dictPreview.innerHTML = '<span class="muted">词典查询结果将显示在这里</span>';
+        meaningEdited = false;
+        meaningInput.value = "";
         return;
       }
 
@@ -293,26 +369,27 @@ async function renderOverlay(payload) {
       if (dict?.meanings?.length) {
         lookupDict = dict;
         lookupReading = safeText(dict?.reading);
-        readingHint.textContent = safeText(dict?.jlpt_level) || getComposedJlptLevel();
+        readingHint.textContent = [safeText(dict?.reading), safeText(dict?.jlpt_level) || getComposedJlptLevel()].filter(Boolean).join(" · ");
         dictPreview.innerHTML = `
-          <div><strong>释义</strong>：${dict.meanings.join("；")}</div>
+          <div class="wb-dict-panel-title">${escapeHtml(dict.lemma)}</div>
+          <div><strong>词典释义</strong>：${dict.meanings.map((m) => escapeHtml(m)).join("；")}</div>
         `;
       } else {
         lookupReading = "";
         lookupDict = null;
         readingHint.textContent = getComposedJlptLevel();
-        dictPreview.innerHTML = '<span class="muted">未命中词典，可手动调整词形</span>';
+        dictPreview.innerHTML = '<span class="muted">未命中在线词典结果，可自行填写释义</span>';
       }
+      applyDictMeaningsToField(dict);
     };
 
     const refreshBubbleState = async () => {
+      meaningEdited = false;
+      composedEdited = false;
       Array.from(tokenList.querySelectorAll(".wb-overlay-token-bubble")).forEach((btn, idx) => {
         btn.classList.toggle("active", selectedIndices.has(idx));
       });
-      const composedSurface = getComposedTokenText();
-      if (!composedEdited) {
-        composedWordInput.value = composedSurface;
-      }
+      composedWordInput.value = getComposedTokenText();
       await refreshDictionaryPreview();
     };
 
@@ -359,9 +436,14 @@ async function renderOverlay(payload) {
     renderTokenBubbles();
     refreshBubbleState().catch(() => {});
     tokenSection.appendChild(tokenList);
-    tokenSection.appendChild(composedWordInput);
+
+    tokenSection.appendChild(createEl("div", "wb-overlay-label", "词典查询"));
     tokenSection.appendChild(dictPreview);
     tokenSection.appendChild(readingHint);
+    tokenSection.appendChild(createEl("div", "wb-overlay-label", "词形"));
+    tokenSection.appendChild(composedWordInput);
+    tokenSection.appendChild(createEl("div", "wb-overlay-label", "释义（保存到词典）"));
+    tokenSection.appendChild(meaningInput);
 
     addBtnHandler = async () => {
       status.textContent = "保存中...";
@@ -373,7 +455,10 @@ async function renderOverlay(payload) {
       const composedDictionaryForm = getComposedDictionaryForm() || composedSurface;
       const composedReading = lookupReading || getComposedReading();
       const composedJlptLevel = safeText(lookupDict?.jlpt_level) || getComposedJlptLevel();
-      const composedMeanings = Array.isArray(lookupDict?.meanings) ? lookupDict.meanings : [];
+      let composedMeanings = parseMeaningsField();
+      if (!composedMeanings.length && lookupDict?.meanings?.length) {
+        composedMeanings = [...lookupDict.meanings];
+      }
       const tags = getTags();
       const words = [
         {
@@ -399,13 +484,17 @@ async function renderOverlay(payload) {
 
       const saveRes = await chrome.runtime.sendMessage({
         type: "POC_ADD_RECENT_WORDS",
-        words
+        words,
+        share_to_partner: Boolean(hasPartnerFromSpace && shareCheck.checked),
+        partner_comment: safeText(partnerCommentInput.value)
       });
       if (!saveRes?.ok) {
         status.textContent = `保存失败: ${safeText(saveRes?.error)}`;
         return;
       }
-      status.textContent = Number(saveRes.created_count || 0) > 0 ? "已保存 1 个词" : "已跳过重复词条";
+      let msg = Number(saveRes.created_count || 0) > 0 ? "已保存 1 个词" : "已跳过重复词条";
+      if (saveRes.share_error) msg += `（分享：${safeText(saveRes.share_error)}）`;
+      status.textContent = msg;
     };
   }
   if (tokens.length === 0) {
@@ -415,7 +504,7 @@ async function renderOverlay(payload) {
   const actions = createEl("div", "wb-overlay-actions");
   const addBtn = createEl("button", "wb-btn wb-btn-primary", "添加到词典");
   const sentenceBtn = createEl("button", "wb-btn wb-btn-default", "只保存句子");
-  const closeBtn = createEl("button", "wb-btn wb-btn-default", "取消本次");
+  const closeBtn = createEl("button", "wb-btn wb-btn-default", "关闭窗口");
   const resumeBtn = createEl("button", "wb-btn wb-btn-default", "恢复播放");
   actions.appendChild(addBtn);
   actions.appendChild(sentenceBtn);
@@ -450,39 +539,60 @@ async function renderOverlay(payload) {
   sentenceBtn.addEventListener("click", async () => {
     status.textContent = "保存句子中...";
     const tags = getTags();
-    const res = await chrome.runtime.sendMessage({
-      type: "POC_ADD_SENTENCE_ONLY",
-      sentence: {
-        example_ja: safeText(jaTextarea.value),
-        example_zh: safeText(zhTextarea.value),
-        tags,
-        screenshot_base64: safeText(payload?.screenshot_base64) || null,
-        playback: payload?.playback || null
-      }
-    });
-    status.textContent = res?.ok ? "句子已保存" : `保存失败: ${safeText(res?.error)}`;
-    if (res?.ok) saved = true;
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "POC_ADD_SENTENCE_ONLY",
+        sentence: {
+          example_ja: safeText(jaTextarea.value),
+          example_zh: safeText(zhTextarea.value),
+          tags,
+          screenshot_base64: safeText(payload?.screenshot_base64) || null,
+          playback: payload?.playback || null
+        },
+        share_to_partner: Boolean(hasPartnerFromSpace && shareCheck.checked),
+        partner_comment: safeText(partnerCommentInput.value)
+      });
+      status.textContent = res?.ok
+        ? res.share_error
+          ? `句子已保存（分享未完成：${safeText(res.share_error)}）`
+          : "句子已保存"
+        : `保存失败: ${safeText(res?.error)}`;
+      if (res?.ok) saved = true;
+    } catch (error) {
+      status.textContent = `保存失败: ${safeText(error?.message || error)}`;
+    }
   });
 
   if (payload?.loading) {
     const loadingWrap = createEl("div", "wb-overlay-loading");
     const spinner = createEl("div", "wb-spinner");
     const text = createEl("div", "muted", "正在识别字幕并查询词典，请稍候...");
-    const cancelBtn = createEl("button", "wb-btn wb-btn-default", "取消本次");
+    const cancelBtn = createEl("button", "wb-btn wb-btn-default", "关闭窗口");
     cancelBtn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "POC_RELEASE_CAPTURE_LOCK" }).catch(() => {});
       removeOverlay();
     });
     loadingWrap.appendChild(spinner);
     loadingWrap.appendChild(text);
-    loadingWrap.appendChild(cancelBtn);
-    card.appendChild(title);
-    card.appendChild(meta);
-    card.appendChild(loadingWrap);
-    card.appendChild(status);
-    const pos = calcCardPosition(payload?.playback?.video_rect);
-    card.style.left = `${pos.left}px`;
-    card.style.top = `${pos.top}px`;
+
+    const cardHeaderLoading = createEl("div", "wb-overlay-card-header");
+    cardHeaderLoading.appendChild(title);
+    cardHeaderLoading.appendChild(meta);
+
+    const cardScrollLoading = createEl("div", "wb-overlay-card-scroll");
+    cardScrollLoading.appendChild(loadingWrap);
+
+    const loadingActions = createEl("div", "wb-overlay-actions");
+    loadingActions.appendChild(cancelBtn);
+
+    const cardFooterLoading = createEl("div", "wb-overlay-card-footer");
+    cardFooterLoading.appendChild(loadingActions);
+    cardFooterLoading.appendChild(status);
+
+    card.appendChild(cardHeaderLoading);
+    card.appendChild(cardScrollLoading);
+    card.appendChild(cardFooterLoading);
+
     root.appendChild(mask);
     root.appendChild(card);
     getOverlayHost().appendChild(root);
@@ -494,18 +604,23 @@ async function renderOverlay(payload) {
     removeOverlay();
   });
 
-  card.appendChild(title);
-  card.appendChild(meta);
-  card.appendChild(jaSection);
-  card.appendChild(zhSection);
-  card.appendChild(tagSection);
-  card.appendChild(tokenSection);
-  card.appendChild(actions);
-  card.appendChild(status);
+  const cardHeader = createEl("div", "wb-overlay-card-header");
+  cardHeader.appendChild(title);
+  cardHeader.appendChild(meta);
 
-  const pos = calcCardPosition(payload?.playback?.video_rect);
-  card.style.left = `${pos.left}px`;
-  card.style.top = `${pos.top}px`;
+  const cardScroll = createEl("div", "wb-overlay-card-scroll");
+  cardScroll.appendChild(jaSection);
+  cardScroll.appendChild(zhSection);
+  cardScroll.appendChild(moreWrap);
+  cardScroll.appendChild(tokenSection);
+
+  const cardFooter = createEl("div", "wb-overlay-card-footer");
+  cardFooter.appendChild(actions);
+  cardFooter.appendChild(status);
+
+  card.appendChild(cardHeader);
+  card.appendChild(cardScroll);
+  card.appendChild(cardFooter);
 
   root.appendChild(mask);
   root.appendChild(card);

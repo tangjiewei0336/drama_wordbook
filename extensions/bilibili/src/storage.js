@@ -1,6 +1,24 @@
 const SETTINGS_KEY = "settings";
 const RECENT_WORDS_KEY = "recent_words";
 
+export const DEFAULT_SIDECAR_BASE_URL = "http://127.0.0.1:17321";
+
+/** Origin only (scheme + host + port), defaults to Drama Wordbook local sidecar. */
+export function normalizeSidecarBaseUrl(input) {
+  const fallback = DEFAULT_SIDECAR_BASE_URL;
+  const raw = String(input ?? "").trim();
+  let candidate = (raw || fallback).replace(/\/+$/, "");
+  try {
+    const u = new URL(candidate.match(/^https?:\/\//i) ? candidate : `http://${candidate.replace(/^\/+/, "")}`);
+    if (!/^https?:$/i.test(u.protocol)) {
+      return fallback;
+    }
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return fallback;
+  }
+}
+
 function isMacPlatform() {
   try {
     return /Mac/i.test(navigator.platform || "");
@@ -21,6 +39,7 @@ export const DEFAULT_SETTINGS = {
   subtitleSplitRatio: 0.5,
   autoPauseOnCapture: true,
   maxRecentWords: 50,
+  sidecarBaseUrl: DEFAULT_SIDECAR_BASE_URL,
   hotkey: DEFAULT_HOTKEY
 };
 
@@ -58,7 +77,8 @@ function normalizeSettings(raw = {}) {
       meta: Boolean(inputHotkey.meta),
       alt: Boolean(inputHotkey.alt),
       shift: Boolean(inputHotkey.shift)
-    }
+    },
+    sidecarBaseUrl: normalizeSidecarBaseUrl(merged.sidecarBaseUrl)
   };
 }
 

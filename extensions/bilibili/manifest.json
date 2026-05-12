@@ -6,8 +6,10 @@
   "permissions": ["activeTab", "tabs", "scripting", "storage"],
   "host_permissions": [
     "https://www.bilibili.com/*",
-    "http://127.0.0.1:17321/*"
+    "http://127.0.0.1:17321/*",
+    "http://localhost:17321/*"
   ],
+  "optional_host_permissions": ["http://*/*"],
   "action": {
     "default_title": "Wordbook POC",
     "default_popup": "popup/popup.html"

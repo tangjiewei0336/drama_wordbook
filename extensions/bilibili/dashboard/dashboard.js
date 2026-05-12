@@ -1,4 +1,9 @@
-const BASE = "http://127.0.0.1:17321";
+import { getSettings } from "../src/storage.js";
+
+async function fetchSidecar(path) {
+  const { sidecarBaseUrl } = await getSettings();
+  return fetch(`${sidecarBaseUrl}${path}`);
+}
 
 const state = {
   view: "byPlayer",
@@ -28,7 +33,7 @@ function setError(message) {
 }
 
 async function getJson(path) {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetchSidecar(path);
   if (!res.ok) {
     throw new Error(`请求失败: ${res.status}`);
   }

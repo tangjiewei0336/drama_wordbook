@@ -58,6 +58,7 @@ import {
   shareSentence,
   shareScreenshotUrl,
   screenshotUrl,
+  DEFAULT_PUBLIC_SYNC_SERVER,
   SIDECAR_BASE,
   startAsrModelLoad,
   tokenizeJapanese,
@@ -159,12 +160,6 @@ function normalizeSpaceError(raw: unknown): string {
   if (text.includes("you already have a partner")) return "你已经有搭子了，不能再发送申请。";
   if (text.includes("target already has a partner")) return "对方已经有搭子了。";
   return text;
-}
-
-function uniqueMeanings(items: VocabItem[]): string[] {
-  return Array.from(
-    new Set(items.flatMap((item) => item.meanings || []).map((item) => String(item).trim()).filter(Boolean))
-  );
 }
 
 function detailKey(item: VocabItem): string {
@@ -275,7 +270,12 @@ export default function App() {
   const [desktopSettingBusy, setDesktopSettingBusy] = useState(false);
   const [desktopSettingsError, setDesktopSettingsError] = useState("");
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ server_url: "", access_token: "", username: "", last_sync_at: "", last_server_version: 0, auto_sync_interval_minutes: 0 });
-  const [loginForm, setLoginForm] = useState({ serverUrl: "", username: "", password: "", inviteCode: "" });
+  const [loginForm, setLoginForm] = useState({
+    serverUrl: DEFAULT_PUBLIC_SYNC_SERVER,
+    username: "",
+    password: "",
+    inviteCode: "",
+  });
   const [selectedItems, setSelectedItems] = useState<VocabItem[]>([]);
   const [selectedHeadId, setSelectedHeadId] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<SelectedSource>(null);
@@ -286,6 +286,8 @@ export default function App() {
   const [sentenceZh, setSentenceZh] = useState("");
   const [sentenceTokens, setSentenceTokens] = useState<JaToken[]>([]);
   const [selectedTokenLookup, setSelectedTokenLookup] = useState<DictLookupResult | null>(null);
+  const [definitionOnlineLookup, setDefinitionOnlineLookup] = useState<DictLookupResult | null>(null);
+  const [definitionLookupBusy, setDefinitionLookupBusy] = useState(false);
   const [sentenceBusy, setSentenceBusy] = useState(false);
   const [editingSentence, setEditingSentence] = useState(false);
   const [sharingSentence, setSharingSentence] = useState(false);
@@ -458,7 +460,43 @@ export default function App() {
   }, [timeItems, search]);
 
   const selectedTitle = selectedItems[0]?.surface || "未选择词条";
-  const selectedMeanings = uniqueMeanings(selectedItems);
+
+  const definitionLookupKey = useMemo(() => {
+    if (!selectedHeadId || !selectedItems.length) return "";
+    const head = selectedItems[0];
+    const lemma = String(head?.dictionary_form || head?.surface || "").trim();
+    return lemma ? `${selectedHeadId}::${lemma}` : `${selectedHeadId}::`;
+  }, [selectedHeadId, selectedItems]);
+
+  useEffect(() => {
+    if (!definitionLookupKey || !definitionLookupKey.includes("::")) {
+      setDefinitionOnlineLookup(null);
+      setDefinitionLookupBusy(false);
+      return;
+    }
+    const [, lemma] = definitionLookupKey.split("::");
+    const clean = lemma.trim();
+    if (!clean) {
+      setDefinitionOnlineLookup(null);
+      return;
+    }
+    let cancelled = false;
+    setDefinitionLookupBusy(true);
+    lookupDictionary(clean)
+      .then((res) => {
+        if (!cancelled) setDefinitionOnlineLookup(res);
+      })
+      .catch(() => {
+        if (!cancelled) setDefinitionOnlineLookup(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDefinitionLookupBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [definitionLookupKey]);
+
   const sourceStats = useMemo(() => {
     const items = selectedSource?.items || [];
     return {
@@ -1621,63 +1659,69 @@ export default function App() {
               <span>搭子分享</span>
             </div>
             <div className="unread-share-list">
-              {unreadShares.map((share) => (
-                <article className="unread-share-card" key={share.id}>
-                  <div className="share-header">
-                    <strong>{share.sender_profile?.nickname || share.sender_username}</strong>
-                    <span>{formatDate(share.created_at)}</span>
-                  </div>
-                  <div className="share-layout">
-                    <div className="share-main">
-                      {share.has_screenshot ? <img className="share-shot" src={shareScreenshotUrl(share.id)} alt="shared screenshot" /> : null}
-                      <blockquote>{share.sentence?.example_ja || "未附带句子"}</blockquote>
-                      {share.sentence?.example_zh ? <small>{share.sentence.example_zh}</small> : null}
+              {unreadShares.map((share) => {
+                const myUser = syncConfig.username?.trim() || "";
+                const isOwnThread = Boolean(myUser && share.sender_username === myUser);
+                const originDefaultText = isOwnThread ? "已把这句台词分享给搭子。" : "分享了一句台词给你。";
+                return (
+                  <article className="unread-share-card" key={share.id}>
+                    <div className="share-header">
+                      <strong>{share.sender_profile?.nickname || share.sender_username}</strong>
+                      {isOwnThread ? <small className="share-thread-own">我发起的</small> : null}
+                      <span className="share-header-time">{formatDate(share.created_at)}</span>
                     </div>
-                    <div className="share-comment-tags">
-                      {[
-                        {
-                          id: `origin-${share.id}`,
-                          sender: share.sender_profile?.nickname || share.sender_username,
-                          text: (share.comment || "").trim() || "分享了一句台词给你。",
-                        },
-                        ...(share.replies || []).map((reply) => ({
-                          id: String(reply.id),
-                          sender: reply.sender_profile?.nickname || reply.sender_username,
-                          text: reply.comment || "回复了这条分享",
-                        })),
-                      ].map((node) => (
-                        <div key={node.id} className="share-comment-tag">
-                          <strong>{node.sender}</strong>
-                          <span>{node.text}</span>
-                        </div>
-                      ))}
+                    <div className="share-layout">
+                      <div className="share-main">
+                        {share.has_screenshot ? <img className="share-shot" src={shareScreenshotUrl(share.id)} alt="shared screenshot" /> : null}
+                        <blockquote>{share.sentence?.example_ja || "未附带句子"}</blockquote>
+                        {share.sentence?.example_zh ? <small>{share.sentence.example_zh}</small> : null}
+                      </div>
+                      <div className="share-comment-tags">
+                        {[
+                          {
+                            id: `origin-${share.id}`,
+                            sender: share.sender_profile?.nickname || share.sender_username,
+                            text: (share.comment || "").trim() || originDefaultText,
+                          },
+                          ...(share.replies || []).map((reply) => ({
+                            id: String(reply.id),
+                            sender: reply.sender_profile?.nickname || reply.sender_username,
+                            text: (reply.comment || "").trim() || "评论",
+                          })),
+                        ].map((node) => (
+                          <div key={node.id} className="share-comment-tag">
+                            <strong>{node.sender}</strong>
+                            <span>{node.text}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  <div className="share-actions">
-                    <button
-                      className="icon-button share-icon-btn"
-                      title="跳转播放"
-                      disabled={!share.sentence?.playback?.url}
-                      onClick={() => openExternal(withPlaybackTime(String(share.sentence?.playback?.url || ""), Number(share.sentence?.playback?.current_time || 0)))}
-                    >
-                      <ExternalLink size={14} />
-                    </button>
-                    <button className="icon-button share-icon-btn" title="收藏到我的句子" disabled={partnerBusy} onClick={() => onCollectShare(share)}>
-                      <Save size={14} />
-                    </button>
-                  </div>
-                  <div className="share-reply-box">
-                    <input
-                      value={replyDraftByShare[share.id] || ""}
-                      placeholder="回复这条分享"
-                      onChange={(event) => setReplyDraftByShare((current) => ({ ...current, [share.id]: event.target.value }))}
-                    />
-                    <button className="icon-button share-icon-btn" title="发送回复" disabled={partnerBusy} onClick={() => onReplyShare(share.id)}>
-                      <Send size={15} />
-                    </button>
-                  </div>
-                </article>
-              ))}
+                    <div className="share-actions">
+                      <button
+                        className="icon-button share-icon-btn"
+                        title="跳转播放"
+                        disabled={!share.sentence?.playback?.url}
+                        onClick={() => openExternal(withPlaybackTime(String(share.sentence?.playback?.url || ""), Number(share.sentence?.playback?.current_time || 0)))}
+                      >
+                        <ExternalLink size={14} />
+                      </button>
+                      <button className="icon-button share-icon-btn" title="收藏到我的句子" disabled={partnerBusy} onClick={() => onCollectShare(share)}>
+                        <Save size={14} />
+                      </button>
+                    </div>
+                    <div className="share-reply-box">
+                      <input
+                        value={replyDraftByShare[share.id] || ""}
+                        placeholder="回复这条分享"
+                        onChange={(event) => setReplyDraftByShare((current) => ({ ...current, [share.id]: event.target.value }))}
+                      />
+                      <button className="icon-button share-icon-btn" title="发送回复" disabled={partnerBusy} onClick={() => onReplyShare(share.id)}>
+                        <Send size={15} />
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </section>
         ) : null}
@@ -2170,6 +2214,25 @@ export default function App() {
                 <div className="empty centered">从左侧选择一个词条查看详情。</div>
               ) : (
                 <>
+                  {definitionLookupBusy ? (
+                    <div className="token-dict-card muted">正在查询在线词典…</div>
+                  ) : definitionOnlineLookup ? (
+                    <div className="token-dict-card wordbook-online-dict">
+                      <div className="wordbook-online-dict-label">在线词典</div>
+                      <strong>{definitionOnlineLookup.lemma}</strong>
+                      {definitionOnlineLookup.reading ? <span>{definitionOnlineLookup.reading}</span> : null}
+                      {definitionOnlineLookup.jlpt_level ? <span className="jlpt-pill">{definitionOnlineLookup.jlpt_level}</span> : null}
+                      {definitionOnlineLookup.meanings.length ? (
+                        <ol>
+                          {definitionOnlineLookup.meanings.map((meaning) => <li key={meaning}>{meaning}</li>)}
+                        </ol>
+                      ) : (
+                        <p className="muted">未查到在线释义。</p>
+                      )}
+                    </div>
+                  ) : selectedItems.length ? (
+                    <div className="token-dict-card muted">暂无在线释义（可稍后重试或检查网络）</div>
+                  ) : null}
                   <div className="word-title">
                     <h2>{selectedTitle}</h2>
                     {selectedItems[0]?.reading ? <span>{toHiragana(selectedItems[0].reading)}{accentMark(selectedItems[0].accent)}</span> : null}
@@ -2178,15 +2241,7 @@ export default function App() {
                       <Volume2 size={15} />
                     </button>
                   </div>
-                  {selectedMeanings.length ? (
-                    <ol className="meaning-list">
-                      {selectedMeanings.map((meaning) => (
-                        <li key={meaning}>{meaning}</li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <div className="empty">暂无释义。</div>
-                  )}
+                  <p className="muted wordbook-definition-hint">你在保存词语时填写的释义已显示在每个「例句」卡片中。</p>
                 </>
               )}
             </section>
@@ -2195,7 +2250,7 @@ export default function App() {
           {!selectedSource ? <section className="examples-panel">
             <div className="section-title">
               <BookOpen size={17} />
-              <span>例句实例</span>
+              <span>关联句子</span>
             </div>
             <div className="example-list">
               {loading ? <div className="empty">加载中...</div> : null}
@@ -2213,6 +2268,12 @@ export default function App() {
                       {item.example_ja || item.surface}
                     </strong>
                     {item.example_zh ? <span>{item.example_zh}</span> : null}
+                    {(item.meanings || []).some((m) => String(m || "").trim()) ? (
+                      <div className="example-user-meanings">
+                        <strong>释义</strong>
+                        <span>{(item.meanings || []).filter((m) => String(m || "").trim()).join("；")}</span>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="example-meta">
                     <span>{formatDate(item.created_at)}</span>
