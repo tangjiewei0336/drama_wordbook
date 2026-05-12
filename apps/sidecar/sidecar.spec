@@ -17,6 +17,10 @@ hiddenimports += collect_submodules("fastapi")
 hiddenimports += collect_submodules("pydantic")
 hiddenimports += collect_submodules("sudachipy")
 hiddenimports += collect_submodules("pyopenjtalk")
+hiddenimports += collect_submodules("paddlex")
+# PaddleX OCR pulls OpenCV / helpers dynamically; PyInstaller often misses them.
+for _ocr_hid in ("cv2", "yaml", "shapely", "shapely.geometry", "pyclipper"):
+    hiddenimports.append(_ocr_hid)
 
 datas = []
 datas += collect_data_files("sudachidict_core")
