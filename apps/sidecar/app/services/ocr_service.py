@@ -38,8 +38,16 @@ def _split_lang_lines(lines: list[str]) -> tuple[list[str], list[str]]:
 def get_ocr_engine():
     if PaddleOCR is None:
         return None
-    # lang="ch" contains Chinese and can often handle Japanese subtitles in practice.
-    return PaddleOCR(use_angle_cls=True, lang="ch")
+    try:
+        # lang="ch" contains Chinese and can often handle Japanese subtitles in practice.
+        return PaddleOCR(use_angle_cls=True, lang="ch")
+    except Exception as exc:  # pragma: no cover - env specific
+        logger.exception("PaddleOCR initialization failed (%s)", exc)
+        raise RuntimeError(
+            "OCR engine failed to start (missing PaddleX/OpenCV OCR deps?). "
+            "Reinstall sidecar deps: pip install -e 'apps/sidecar' and ensure "
+            "paddlex[ocr-core] is installed."
+        ) from exc
 
 
 def decode_base64_image(image_base64: str) -> Image.Image:
