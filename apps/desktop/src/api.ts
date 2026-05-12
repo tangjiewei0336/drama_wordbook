@@ -505,3 +505,69 @@ export function shareScreenshotUrl(
   }
   return `${SIDECAR_BASE}/shares/${share.id}/screenshot`;
 }
+
+export type ReviewQuestion = Record<string, unknown>;
+
+export type ReviewStartResult = {
+  session_id: string;
+  resumed: boolean;
+  calendar_day: string;
+  cursor: number;
+  total: number;
+  current: ReviewQuestion | null;
+  completed: boolean;
+  empty_reason?: string;
+};
+
+export type ReviewAnswerResult = {
+  done: boolean;
+  correct: boolean;
+  current: ReviewQuestion | null;
+  hint_reading_after_wrong: boolean;
+  reading_stage: string;
+  head_state: { mastered?: boolean; distinct_days?: number; updated?: boolean };
+  advanced?: boolean;
+};
+
+/** 本地日历日（浏览器时区）*/
+export function localCalendarDay(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export async function fetchReviewSnapshot(): Promise<{ eligible_heads: number; mastered_heads: number }> {
+  return getJson(`/review/snapshot`);
+}
+
+export async function postReviewStart(calendar_day: string, question_limit: number): Promise<ReviewStartResult> {
+  const res = await fetch(`${SIDECAR_BASE}/review/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ calendar_day, question_limit }),
+  });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `复习会话失败（${res.status}）`));
+  }
+  return (await res.json()) as ReviewStartResult;
+}
+
+export async function postReviewAnswer(body: {
+  session_id: string;
+  calendar_day: string;
+  choice_index?: number;
+  text?: string;
+  order_piece_ids?: string[];
+}): Promise<ReviewAnswerResult> {
+  const res = await fetch(`${SIDECAR_BASE}/review/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `提交答案失败（${res.status}）`));
+  }
+  return (await res.json()) as ReviewAnswerResult;
+}

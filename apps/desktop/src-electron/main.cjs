@@ -177,6 +177,15 @@ function fileExists(filePath) {
   }
 }
 
+/** PyInstaller onedir 会生成与可执行文件同名的目录；exists 为真但不能 spawn，需 isFile。 */
+function isExecutableFile(filePath) {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function resolvePythonCommand(sidecarDir) {
   if (process.env.DRAMA_WORDBOOK_PYTHON) {
     return { command: process.env.DRAMA_WORDBOOK_PYTHON, argsPrefix: [] };
@@ -198,16 +207,20 @@ function resolvePythonCommand(sidecarDir) {
 
 function resolveBundledSidecarCommand(sidecarDir) {
   const executableName = process.platform === "win32" ? "drama-wordbook-sidecar.exe" : "drama-wordbook-sidecar";
-  // PyInstaller onedir: Resources/sidecar/<exe> plus _internal/ (electron-builder copies dist/drama-wordbook-sidecar → sidecar).
-  // Legacy onefile: Resources/sidecar/<exe> only.
+  // 开发模式默认走 venv + uvicorn；若需本地测冻结二进制：DRAMA_WORDBOOK_USE_BUNDLED_SIDECAR=1
+  if (useDevServer && process.env.DRAMA_WORDBOOK_USE_BUNDLED_SIDECAR !== "1") {
+    return null;
+  }
+  // PyInstaller onedir: 可执行文件在 dist/drama-wordbook-sidecar/drama-wordbook-sidecar（外层同名的是目录，勿 spawn）。
+  // electron-builder 把 dist/drama-wordbook-sidecar/* 拷到 Resources/sidecar/，多为 sidecar/<exe> + _internal。
   const candidates = [
     path.join(sidecarDir, executableName),
     path.join(sidecarDir, "drama-wordbook-sidecar", executableName),
-    path.join(sidecarDir, "bin", executableName),
-    path.join(sidecarDir, "dist", executableName),
     path.join(sidecarDir, "dist", "drama-wordbook-sidecar", executableName),
+    path.join(sidecarDir, "dist", executableName),
+    path.join(sidecarDir, "bin", executableName),
   ];
-  const executable = candidates.find(fileExists);
+  const executable = candidates.find(isExecutableFile);
   return executable ? { command: executable, args: [], cwd: path.dirname(executable) } : null;
 }
 
@@ -486,7 +499,11 @@ app.whenReady().then(() => {
     return [];
   });
   ipcMain.handle("sidecar-restart", async () => {
+    const previous = sidecarProcess;
     stopSidecar();
+    if (previous) {
+      await new Promise((resolve) => previous.once("exit", resolve));
+    }
     sidecarStopping = false;
     await startSidecar();
     startHealthLoop();

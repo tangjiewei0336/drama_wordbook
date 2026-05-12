@@ -147,6 +147,7 @@ def init_db() -> None:
             conn.execute("ALTER TABLE vocab_item ADD COLUMN updated_at TEXT")
         _migrate_sentences(conn)
         _migrate_item_uuid_and_updated_at(conn)
+        _migrate_review_tables(conn)
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vocab_item_uuid ON vocab_item(item_uuid)")
         conn.commit()
     finally:
@@ -158,6 +159,8 @@ def clear_db() -> None:
     try:
         conn.executescript(
             """
+            DELETE FROM review_session;
+            DELETE FROM review_head_state;
             DELETE FROM vocab_item;
             DELETE FROM vocab_head;
             DELETE FROM sentence;
@@ -212,6 +215,12 @@ def _migrate_sentences(conn: sqlite3.Connection) -> None:
             ),
         )
         conn.execute("UPDATE vocab_item SET sentence_id = ? WHERE id = ?", (int(cur.lastrowid), int(row["id"])))
+
+
+def _migrate_review_tables(conn: sqlite3.Connection) -> None:
+    from app.services.review_service import init_review_tables
+
+    init_review_tables(conn)
 
 
 def _migrate_item_uuid_and_updated_at(conn: sqlite3.Connection) -> None:

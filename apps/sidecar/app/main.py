@@ -28,6 +28,11 @@ from app.models.schemas import (
     PlaybackContextRequest,
     PlaybackContextResponse,
     Profile,
+    ReviewAnswerRequest,
+    ReviewAnswerResponse,
+    ReviewSnapshotResponse,
+    ReviewStartRequest,
+    ReviewStartResponse,
     SentenceAddRequest,
     SentenceListResponse,
     SentenceRecord,
@@ -55,7 +60,11 @@ from app.services.asr_service import (
 )
 from app.services.ocr_service import run_ocr
 from app.services.tokenizer_service import tokenize_ja
+from app.services.review_service import evaluate_answer as review_evaluate_answer
+from app.services.review_service import review_snapshot as review_snapshot_service
+from app.services.review_service import start_or_resume_session as review_start_session
 from app.services.vocab_service import (
+    _get_conn,
     accept_partner_request,
     add_items,
     add_sentence,
@@ -501,3 +510,42 @@ def asr_status():
 @app.post("/asr/model/load")
 def asr_model_load():
     return start_asr_model_load()
+
+
+@app.post("/review/start", response_model=ReviewStartResponse)
+def review_start_endpoint(payload: ReviewStartRequest):
+    conn = _get_conn()
+    try:
+        return ReviewStartResponse(**review_start_session(conn, payload.calendar_day, payload.question_limit))
+    finally:
+        conn.close()
+
+
+@app.post("/review/answer", response_model=ReviewAnswerResponse)
+def review_answer_endpoint(payload: ReviewAnswerRequest):
+    conn = _get_conn()
+    try:
+        ans = payload.model_dump()
+        payload_dict = {}
+        if ans.get("choice_index") is not None:
+            payload_dict["choice_index"] = ans["choice_index"]
+        if ans.get("text") is not None:
+            payload_dict["text"] = ans["text"]
+        if ans.get("order_piece_ids") is not None:
+            payload_dict["order_piece_ids"] = ans["order_piece_ids"]
+        raw = review_evaluate_answer(
+            conn,
+            session_id=str(ans["session_id"]),
+            calendar_day=str(ans["calendar_day"]),
+            payload=payload_dict,
+        )
+        return ReviewAnswerResponse(**raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/review/snapshot", response_model=ReviewSnapshotResponse)
+def review_snapshot_endpoint():
+    return ReviewSnapshotResponse(**review_snapshot_service())

@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Brain,
   CalendarClock,
   ChevronDown,
   Clapperboard,
@@ -80,6 +81,7 @@ import {
   type SyncConflict,
   type VocabItem,
 } from "./api";
+import { ReviewDrill } from "./review/ReviewDrill";
 import "./styles.css";
 import avatar01Thumb from "./assets/avatars/100/avatar-01.jpg";
 import avatar02Thumb from "./assets/avatars/100/avatar-02.jpg";
@@ -95,7 +97,7 @@ import avatar05Full from "./assets/avatars/500/avatar-05.jpg";
 import avatar06Full from "./assets/avatars/500/avatar-06.jpg";
 
 type ViewMode = "byPlayer" | "byTime";
-type MainMode = ViewMode | "sentences" | "space" | "profile" | "runtime";
+type MainMode = ViewMode | "sentences" | "space" | "profile" | "runtime" | "review";
 type SelectedSource = Pick<PlayerNode, "platform" | "source" | "series_name" | "episode_name" | "items"> | null;
 type LogEntry = { id: string; at: string; level: string; source: string; message: string };
 type SentenceGroup = {
@@ -2204,6 +2206,9 @@ export default function App() {
           <button className={view === "sentences" ? "active" : ""} onClick={() => setView("sentences")} title="句子">
             <MessageSquareText size={19} />
           </button>
+          <button className={view === "review" ? "active" : ""} onClick={() => setView("review")} title="复习冲刺">
+            <Brain size={19} />
+          </button>
           <button className={view === "space" ? "active" : ""} onClick={() => setView("space")} title="追剧空间">
             <Users size={19} />
           </button>
@@ -2242,12 +2247,17 @@ export default function App() {
           <div className="scroll-area">{view === "byPlayer" ? renderSourceList() : view === "sentences" ? renderSentenceList() : renderTimeList()}</div>
         </section> : null}
 
-        <section className={view === "runtime" || view === "space" || view === "profile" ? "detail-pane detail-pane-wide" : "detail-pane"}>
+        <section className={
+          view === "runtime" || view === "space" || view === "profile" || view === "review"
+            ? "detail-pane detail-pane-wide"
+            : "detail-pane"
+        }>
           {view === "runtime" ? renderRuntimePanel() : null}
+          {view === "review" ? <ReviewDrill sidecarOnline={isSidecarOnline} /> : null}
           {view === "space" ? renderSpacePanel() : null}
           {view === "profile" ? renderProfilePanel() : null}
           {view === "sentences" ? renderSentencePanel() : null}
-          {view !== "runtime" && view !== "space" && view !== "profile" ? (
+          {view !== "runtime" && view !== "space" && view !== "profile" && view !== "review" ? (
           <>
           {view !== "sentences" ? (
           <>
