@@ -50,6 +50,10 @@ hiddenimports += _safe_collect_submodules("paddleocr")
 # PaddlePaddle itself: native ops live under paddle._C and many lazy modules.
 # Without collect_submodules("paddle") the C++ extension loader breaks at import.
 hiddenimports += _safe_collect_submodules("paddle")
+# paddle.utils.cpp_extension reads Cython/Utility/*.cpp templates at import time
+# (or via inline op build). PyInstaller would otherwise ship Cython as bytecode
+# only and miss these non-Python resource files.
+hiddenimports += _safe_collect_submodules("Cython")
 # Helper libs paddleocr/paddle pull in dynamically; keep explicit so a missing
 # wheel surfaces during build instead of at runtime.
 for _ocr_hid in (
@@ -83,6 +87,10 @@ datas += _safe_collect_data_files("paddleocr", include_py_files=True)
 datas += _safe_collect_data_files("paddle", include_py_files=False)
 datas += _safe_collect_data_files("shapely")
 datas += _safe_collect_data_files("skimage")
+# Cython ships .cpp/.pyx templates under Cython/Utility/ and Cython/Includes/;
+# paddle (and some image libs) read them via importlib.resources at runtime,
+# so we must bundle them as data even though Cython itself is mostly .py.
+datas += _safe_collect_data_files("Cython", include_py_files=True)
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]
 
 # Native libs: paddlepaddle ships libpaddle.* / libgomp / libdnnl, opencv ships
