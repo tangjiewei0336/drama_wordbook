@@ -43,10 +43,10 @@ hiddenimports += collect_submodules("fastapi")
 hiddenimports += collect_submodules("pydantic")
 hiddenimports += collect_submodules("sudachipy")
 hiddenimports += collect_submodules("pyopenjtalk")
-# PaddleOCR 2.x has many lazy/dynamic imports (ppocr/data, ppocr/postprocess,
-# ppocr/modeling, tools/infer, etc.); collect the whole package or runtime
-# registration (det/rec/cls algorithms) will fail in a frozen build.
+# PaddleOCR 3.x routes through PaddleX pipelines (paddlex.inference.pipelines
+# .ocr) for predict(); these submodules are discovered dynamically by config.
 hiddenimports += _safe_collect_submodules("paddleocr")
+hiddenimports += _safe_collect_submodules("paddlex")
 # PaddlePaddle itself: native ops live under paddle._C and many lazy modules.
 # Without collect_submodules("paddle") the C++ extension loader breaks at import.
 hiddenimports += _safe_collect_submodules("paddle")
@@ -54,6 +54,8 @@ hiddenimports += _safe_collect_submodules("paddle")
 # (or via inline op build). PyInstaller would otherwise ship Cython as bytecode
 # only and miss these non-Python resource files.
 hiddenimports += _safe_collect_submodules("Cython")
+# openpyxl: /export/wordbook.xlsx; collect lazy submodules in frozen builds.
+hiddenimports += _safe_collect_submodules("openpyxl")
 # Helper libs paddleocr/paddle pull in dynamically; keep explicit so a missing
 # wheel surfaces during build instead of at runtime.
 for _ocr_hid in (
@@ -80,9 +82,12 @@ for _ocr_hid in (
 datas: list = []
 datas += collect_data_files("sudachidict_core")
 datas += collect_data_files("pyopenjtalk")
-# PaddleOCR package data / models metadata for frozen builds (2.x PP-OCR).
+# PaddleOCR + PaddleX 3.x package YAML/JSON pipeline configs and the
+# multilingual recognizer dictionaries; without these the pipeline init
+# raises "The pipeline (OCR) does not exist!".
 # include_py_files=True ships .py for dynamically imported algo registries.
 datas += _safe_collect_data_files("paddleocr", include_py_files=True)
+datas += _safe_collect_data_files("paddlex", include_py_files=True)
 # Paddle ships proto/.so descriptors + version.py needed at runtime.
 datas += _safe_collect_data_files("paddle", include_py_files=False)
 datas += _safe_collect_data_files("shapely")
@@ -93,12 +98,13 @@ datas += _safe_collect_data_files("skimage")
 datas += _safe_collect_data_files("Cython", include_py_files=True)
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]
 
-# Native libs: paddlepaddle ships libpaddle.* / libgomp / libdnnl, opencv ships
-# libopencv_*. Without these the import errors with `paddle._C` or
-# `_cv2` cannot be loaded.
+# Native libs: paddlepaddle ships libpaddle.* / libgomp / libdnnl, paddlex
+# bundles a few helper sos, opencv ships libopencv_*. Without these the
+# import errors with `paddle._C` or `_cv2` cannot be loaded.
 binaries: list = []
 binaries += _safe_collect_dynamic_libs("paddle")
 binaries += _safe_collect_dynamic_libs("paddleocr")
+binaries += _safe_collect_dynamic_libs("paddlex")
 binaries += _safe_collect_dynamic_libs("cv2")
 
 a = Analysis(

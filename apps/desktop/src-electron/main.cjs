@@ -355,12 +355,24 @@ async function startSidecar() {
     startedAt: new Date().toISOString(),
   });
 
+  // Persist user data outside the app bundle so reinstalls/auto-updates do not
+  // wipe the local sqlite DB and screenshots. The directory follows Electron's
+  // platform convention via app.getPath("userData").
+  const userDataDir = app.getPath("userData");
+  const sidecarDataDir = path.join(userDataDir, "sidecar-data");
+  try {
+    fs.mkdirSync(sidecarDataDir, { recursive: true });
+  } catch (error) {
+    addLog("warn", "desktop", `Could not pre-create sidecar data dir: ${error.message}`);
+  }
+
   sidecarProcess = spawn(command, args, {
     cwd: spawnCwd,
     env: {
       ...process.env,
       PYTHONUNBUFFERED: "1",
       ASR_PRELOAD: process.env.ASR_PRELOAD || "0",
+      DRAMA_WORDBOOK_DATA_DIR: process.env.DRAMA_WORDBOOK_DATA_DIR || sidecarDataDir,
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,

@@ -258,6 +258,31 @@ export async function deleteSentence(sentenceId: number): Promise<{ ok: boolean;
   return (await res.json()) as { ok: boolean; deleted_sentence_id: number; deleted_word_count: number };
 }
 
+/** 将本地全部生词条目与句子导出为 Excel（工作表「生词」「句子」）。 */
+export async function downloadWordbookExcel(): Promise<void> {
+  const res = await fetch(`${SIDECAR_BASE}/export/wordbook.xlsx`);
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `导出失败（${res.status}）`));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename="([^"]+)"/.exec(cd);
+  const fallback = `drama-wordbook-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const name = m?.[1] || fallback;
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export async function fetchDramaSpace(): Promise<DramaSpace> {
   return getJson<DramaSpace>("/space");
 }
