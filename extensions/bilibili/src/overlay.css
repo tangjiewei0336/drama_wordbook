@@ -3,6 +3,11 @@
   inset: 0;
   z-index: 2147483646;
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
 }
 
 video .wb-overlay-root,
@@ -16,25 +21,62 @@ video .wb-overlay-root,
   inset: 0;
   background: rgba(15, 23, 42, 0.18);
   backdrop-filter: blur(1px);
+  pointer-events: auto;
 }
 
 .wb-overlay-card {
-  position: absolute;
-  width: min(520px, calc(100vw - 32px));
-  max-height: min(80vh, 760px);
-  min-width: 420px;
-  min-height: 360px;
+  position: relative;
+  z-index: 1;
+  width: min(520px, calc(100vw - 48px));
+  max-width: min(560px, calc(100vw - 48px));
+  max-height: min(calc(100vh - 32px), 760px);
+  min-width: min(420px, calc(100vw - 48px));
+  min-height: 0;
+  flex: 0 1 auto;
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid rgba(223, 229, 235, 0.78);
   border-radius: 10px;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
-  padding: 16px;
+  padding: 0;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   backdrop-filter: blur(12px);
   overflow: hidden;
+}
+
+.wb-overlay-card-header {
+  flex: 0 0 auto;
+  padding: 16px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-overlay-card-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wb-overlay-card-footer {
+  flex: 0 0 auto;
+  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid rgba(223, 229, 235, 0.65);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.wb-overlay-card-footer .wb-overlay-actions {
+  padding-top: 12px;
 }
 
 .wb-overlay-resize-handle {
@@ -359,4 +401,49 @@ video .wb-overlay-root,
   to {
     transform: rotate(360deg);
   }
+}
+
+.wb-overlay-dict-panel {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.wb-dict-panel-title {
+  font-weight: 800;
+  color: #18202b;
+  margin-bottom: 4px;
+}
+
+.wb-overlay-reading-hint {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.wb-overlay-meaning-textarea {
+  min-height: 72px;
+  font-size: 13px;
+}
+
+.wb-overlay-more-wrap .wb-overlay-more-toggle {
+  width: 100%;
+}
+
+.wb-overlay-extras-body {
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.wb-overlay-share-label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #344054;
+}
+
+.wb-overlay-partner-comment {
+  min-height: 48px;
+  margin-top: 6px;
 }

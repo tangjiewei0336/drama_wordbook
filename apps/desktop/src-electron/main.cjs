@@ -198,13 +198,17 @@ function resolvePythonCommand(sidecarDir) {
 
 function resolveBundledSidecarCommand(sidecarDir) {
   const executableName = process.platform === "win32" ? "drama-wordbook-sidecar.exe" : "drama-wordbook-sidecar";
+  // PyInstaller onedir: Resources/sidecar/<exe> plus _internal/ (electron-builder copies dist/drama-wordbook-sidecar → sidecar).
+  // Legacy onefile: Resources/sidecar/<exe> only.
   const candidates = [
     path.join(sidecarDir, executableName),
+    path.join(sidecarDir, "drama-wordbook-sidecar", executableName),
     path.join(sidecarDir, "bin", executableName),
     path.join(sidecarDir, "dist", executableName),
+    path.join(sidecarDir, "dist", "drama-wordbook-sidecar", executableName),
   ];
   const executable = candidates.find(fileExists);
-  return executable ? { command: executable, args: [] } : null;
+  return executable ? { command: executable, args: [], cwd: path.dirname(executable) } : null;
 }
 
 function publishSidecarStatus(next) {
@@ -312,6 +316,7 @@ async function startSidecar() {
   const bundled = resolveBundledSidecarCommand(sidecarDir);
   const python = bundled ? null : resolvePythonCommand(sidecarDir);
   const command = bundled?.command || python.command;
+  const spawnCwd = bundled?.cwd ?? sidecarDir;
   const args = bundled
     ? bundled.args
     : [
@@ -338,7 +343,7 @@ async function startSidecar() {
   });
 
   sidecarProcess = spawn(command, args, {
-    cwd: sidecarDir,
+    cwd: spawnCwd,
     env: {
       ...process.env,
       PYTHONUNBUFFERED: "1",

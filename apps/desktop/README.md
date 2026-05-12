@@ -55,7 +55,7 @@ npm run dist:mac
 npm run dist:win
 ```
 
-`electron-builder` copies `apps/sidecar/dist/drama-wordbook-sidecar*` into the app resources. End users do not need Python, pip, or a virtualenv.
+`electron-builder` copies `apps/sidecar/dist/drama-wordbook-sidecar/` (PyInstaller **onedir** output, including `_internal/`) into the app `Resources/sidecar/`. End users do not need Python, pip, or a virtualenv.
 
 Generated desktop artifacts are written to `apps/desktop/release`.
 

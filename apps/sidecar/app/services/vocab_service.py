@@ -4,6 +4,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import ssl
@@ -34,6 +35,10 @@ DEFAULT_SYNC_CONFIG = {
     "last_server_version": 0,
     "auto_sync_interval_minutes": 0,
 }
+# Default public sync host when login/register omit server_url.
+# Override: DRAMA_WORDBOOK_PUBLIC_SYNC_SERVER=http://your-host
+_DEFAULT_SYNC_ENV = os.environ.get("DRAMA_WORDBOOK_PUBLIC_SYNC_SERVER", "").strip().rstrip("/")
+DEFAULT_PUBLIC_SYNC_SERVER_URL = _DEFAULT_SYNC_ENV or "http://146.56.195.192"
 ALLOWED_THEME_COLORS = {"#2e8f76", "#d65f4a", "#4f7cff", "#a85539", "#7c3aed", "#0f766e"}
 DEFAULT_DESKTOP_SETTINGS = {
     "notification_window_start": "18:00",
@@ -446,12 +451,13 @@ def add_sentence(item: dict) -> int:
         conn.close()
 
 
-def add_items(items: list[dict]) -> tuple[list[int], list[int]]:
+def add_items(items: list[dict]) -> tuple[list[int], list[int], list[int]]:
     if not items:
-        return [], []
+        return [], [], []
     conn = _get_conn()
     head_ids: list[int] = []
     item_ids: list[int] = []
+    sentence_ids: list[int] = []
     screenshot_cache: dict[str, str | None] = {}
     try:
         for item in items:
@@ -518,11 +524,12 @@ def add_items(items: list[dict]) -> tuple[list[int], list[int]]:
                 ),
             )
             item_ids.append(int(cur.lastrowid))
+            sentence_ids.append(int(sentence_id))
 
         conn.commit()
     finally:
         conn.close()
-    return sorted(set(head_ids)), item_ids
+    return sorted(set(head_ids)), item_ids, sentence_ids
 
 
 def get_heads() -> list[dict]:
@@ -1137,13 +1144,18 @@ def _reset_sync_session(config: dict | None = None) -> dict:
     return _set_setting("sync_config", next_config)
 
 
-def _normalized_server_url(server_url: str) -> str:
+def _normalized_server_url(server_url: str, *, default_if_empty: str | None = None) -> str:
     clean = str(server_url or "").strip().rstrip("/")
+    if not clean and default_if_empty:
+        clean = str(default_if_empty or "").strip().rstrip("/")
     if not clean:
         return ""
-    if not clean.startswith("http://") and not clean.startswith("https://"):
-        raise ValueError("服务器地址必须以 http:// 或 https:// 开头。")
-    return clean
+    if "://" not in clean:
+        clean = ("http://" + clean.lstrip("/")).rstrip("/")
+    lowered = clean.lower()
+    if not lowered.startswith("http://") and not lowered.startswith("https://"):
+        raise ValueError("同步服务器地址仅支持 http:// 或 https:// 协议。")
+    return clean.rstrip("/")
 
 
 def _urlopen_no_proxy(req: urlrequest.Request, timeout: int = 20):
@@ -1172,6 +1184,17 @@ def _http_error_detail(exc: urlerror.HTTPError) -> str:
     return f"HTTP {int(getattr(exc, 'code', 0) or 0)} 请求失败"
 
 
+def _json_from_sync_http(req: urlrequest.Request, timeout: int = 15) -> dict:
+    try:
+        with _urlopen_no_proxy(req, timeout=timeout) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except urlerror.HTTPError as exc:
+        raise ValueError(_http_error_detail(exc)) from exc
+    except urlerror.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise ValueError(f"无法连接同步服务器（请检查地址、端口与网络）：{reason}") from exc
+
+
 def refresh_profile_from_sync_server() -> dict:
     me = _authed_request("/me")
     remote_profile = me.get("profile") or {}
@@ -1179,7 +1202,7 @@ def refresh_profile_from_sync_server() -> dict:
 
 
 def login_sync_server(server_url: str, username: str, password: str) -> dict:
-    clean_url = _normalized_server_url(server_url)
+    clean_url = _normalized_server_url(server_url, default_if_empty=DEFAULT_PUBLIC_SYNC_SERVER_URL)
     _reset_sync_session({"server_url": clean_url})
     body = json.dumps({"username": username, "password": password}).encode("utf-8")
     req = urlrequest.Request(
@@ -1188,11 +1211,7 @@ def login_sync_server(server_url: str, username: str, password: str) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with _urlopen_no_proxy(req, timeout=15) as res:
-            data = json.loads(res.read().decode("utf-8"))
-    except urlerror.HTTPError as exc:
-        raise ValueError(_http_error_detail(exc)) from exc
+    data = _json_from_sync_http(req, timeout=15)
     token = str(data.get("access_token") or "")
     if not token:
         raise ValueError("服务器没有返回 access_token。")
@@ -1202,7 +1221,7 @@ def login_sync_server(server_url: str, username: str, password: str) -> dict:
 
 
 def register_sync_server(server_url: str, username: str, password: str, invite_code: str = "") -> dict:
-    clean_url = _normalized_server_url(server_url)
+    clean_url = _normalized_server_url(server_url, default_if_empty=DEFAULT_PUBLIC_SYNC_SERVER_URL)
     _reset_sync_session({"server_url": clean_url})
     body = json.dumps({"username": username, "password": password, "invite_code": str(invite_code or "").strip()}).encode("utf-8")
     req = urlrequest.Request(
@@ -1211,11 +1230,7 @@ def register_sync_server(server_url: str, username: str, password: str, invite_c
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with _urlopen_no_proxy(req, timeout=15) as res:
-            data = json.loads(res.read().decode("utf-8"))
-    except urlerror.HTTPError as exc:
-        raise ValueError(_http_error_detail(exc)) from exc
+    data = _json_from_sync_http(req, timeout=15)
     token = str(data.get("access_token") or "")
     if not token:
         raise ValueError("服务器没有返回 access_token。")
@@ -1637,6 +1652,7 @@ def bind_partner_on_server(partner_username: str) -> dict:
 
 
 def get_unread_shares() -> list[dict]:
+    """Partner share threads from server (root messages + nested replies, including own outbound)."""
     try:
         return list((_authed_request("/shares/unread") or {}).get("items") or [])
     except Exception:

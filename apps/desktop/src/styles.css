@@ -654,6 +654,44 @@ button {
   line-height: 1.55;
 }
 
+.wordbook-online-dict.wordbook-online-dict {
+  margin-bottom: 14px;
+}
+
+.wordbook-online-dict-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: #475467;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.wordbook-definition-hint {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.example-user-meanings {
+  margin-top: 8px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(232, 247, 241, 0.55);
+  border: 1px solid rgba(46, 143, 118, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+  color: #263241;
+  line-height: 1.55;
+}
+
+.example-user-meanings strong {
+  font-size: 11px;
+  color: #24745f;
+  font-weight: 800;
+}
+
 .shot-strip {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -1348,10 +1386,23 @@ button {
 
 .share-header {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
   color: #667085;
   font-size: 12px;
+}
+
+.share-header-time {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.share-thread-own {
+  font-weight: 700;
+  color: #24745f;
+  font-size: 11px;
 }
 
 .share-header strong {

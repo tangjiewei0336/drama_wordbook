@@ -183,8 +183,8 @@ def get_playback_context(context_id: str):
 
 @app.post("/vocab/add_items", response_model=VocabAddItemsResponse)
 def vocab_add_items(payload: VocabAddItemsRequest):
-    head_ids, created_item_ids = add_items([x.model_dump() for x in payload.items])
-    return VocabAddItemsResponse(head_ids=head_ids, created_item_ids=created_item_ids)
+    head_ids, created_item_ids, sentence_ids = add_items([x.model_dump() for x in payload.items])
+    return VocabAddItemsResponse(head_ids=head_ids, created_item_ids=created_item_ids, sentence_ids=sentence_ids)
 
 
 @app.post("/sentences", response_model=SentenceRecord)

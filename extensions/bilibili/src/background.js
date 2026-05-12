@@ -1,6 +1,9 @@
 import { addRecentWords, getRecentWords, getSettings, removeRecentWordByVocabItemId } from "./storage.js";
 
-const SIDECAR_BASE = "http://127.0.0.1:17321";
+async function fetchSidecar(path, init) {
+  const { sidecarBaseUrl } = await getSettings();
+  return fetch(`${sidecarBaseUrl}${path}`, init);
+}
 let lastCaptureResult = null;
 let captureLock = false;
 let captureLockStartedAt = 0;
@@ -213,7 +216,7 @@ async function getPlaybackContext(tabId) {
 }
 
 async function postPlaybackContext(payload) {
-  const res = await fetch(`${SIDECAR_BASE}/playback/context`, {
+  const res = await fetchSidecar(`/playback/context`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -234,7 +237,7 @@ async function postOcr(imageBase64, cropRect, viewport) {
     payload.viewport = viewport;
   }
 
-  const res = await fetch(`${SIDECAR_BASE}/ocr/recognize`, {
+  const res = await fetchSidecar(`/ocr/recognize`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -247,7 +250,7 @@ async function postOcr(imageBase64, cropRect, viewport) {
 }
 
 async function postTokenize(text) {
-  const res = await fetch(`${SIDECAR_BASE}/ja/tokenize`, {
+  const res = await fetchSidecar(`/ja/tokenize`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text })
@@ -260,7 +263,7 @@ async function postTokenize(text) {
 }
 
 async function postDictLookup(lemma) {
-  const res = await fetch(`${SIDECAR_BASE}/dict/lookup`, {
+  const res = await fetchSidecar(`/dict/lookup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ lemma })
@@ -284,7 +287,7 @@ function extractOcrTexts(ocrRes) {
 }
 
 async function postVocabAddItems(items) {
-  const res = await fetch(`${SIDECAR_BASE}/vocab/add_items`, {
+  const res = await fetchSidecar(`/vocab/add_items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items })
@@ -296,8 +299,34 @@ async function postVocabAddItems(items) {
   return res.json();
 }
 
+async function postShareSentence(sentenceId, comment) {
+  const res = await fetchSidecar(`/shares`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sentence_id: Number(sentenceId),
+      comment: String(comment || ""),
+      recipient_username: ""
+    })
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+async function getSpacePartnerInfo() {
+  const res = await fetchSidecar("/space");
+  if (!res.ok) return { partner: null };
+  const data = await res.json();
+  const partner = data?.partner ?? null;
+  const username = partner && typeof partner === "object" ? String(partner.username || "").trim() : "";
+  return { partner: username ? { username } : null };
+}
+
 async function postSentence(sentence) {
-  const res = await fetch(`${SIDECAR_BASE}/sentences`, {
+  const res = await fetchSidecar(`/sentences`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(sentence)
@@ -312,11 +341,12 @@ async function postSentence(sentence) {
 async function postVocabAddOne(item) {
   const res = await postVocabAddItems([item]);
   const id = Array.isArray(res?.created_item_ids) ? res.created_item_ids[0] : null;
-  return id ? { ...item, vocab_item_id: id } : null;
+  const sentenceId = Array.isArray(res?.sentence_ids) ? res.sentence_ids[0] : null;
+  return id ? { ...item, vocab_item_id: id, sentence_id: sentenceId } : null;
 }
 
 async function deleteVocabItem(itemId) {
-  const res = await fetch(`${SIDECAR_BASE}/vocab/items/${Number(itemId)}`, {
+  const res = await fetchSidecar(`/vocab/items/${Number(itemId)}`, {
     method: "DELETE"
   });
   if (!res.ok) {
@@ -367,7 +397,7 @@ async function saveTokensAsVocab({ text, zhText = "", screenshotBase64 = null, p
 }
 
 async function postAsrTranscribe(audioBase64) {
-  const res = await fetch(`${SIDECAR_BASE}/asr/transcribe`, {
+  const res = await fetchSidecar(`/asr/transcribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -849,6 +879,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         "POC_GET_LAST_CAPTURE_RESULT",
         "POC_GET_RECENT_WORDS",
         "POC_ADD_RECENT_WORDS",
+        "POC_ADD_SENTENCE_ONLY",
+        "POC_GET_SPACE_PARTNER",
         "POC_RESUME_PLAYBACK",
         "POC_RELEASE_CAPTURE_LOCK",
         "POC_DICT_LOOKUP",
@@ -865,6 +897,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         "POC_DELETE_VOCAB_ITEM"
       ].includes(message?.type)
     ) {
+      return;
+    }
+
+    if (message.type === "POC_GET_SPACE_PARTNER") {
+      try {
+        const { partner } = await getSpacePartnerInfo();
+        const username = partner?.username ? String(partner.username) : "";
+        sendResponse({ ok: true, has_partner: Boolean(username), partner_username: username });
+      } catch (error) {
+        sendResponse({ ok: false, has_partner: false, partner_username: "", error: String(error?.message || error) });
+      }
       return;
     }
 
@@ -893,11 +936,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const updated = await addRecentWords(savedWords, settings.maxRecentWords);
       releaseCaptureLock();
       await broadcastStatus("idle", savedWords.length ? "保存完成" : "已跳过重复词条");
+      let shareError = "";
+      if (
+        Boolean(message.share_to_partner) &&
+        savedWords.length &&
+        Number(savedWords[0]?.sentence_id || 0) > 0
+      ) {
+        try {
+          await postShareSentence(savedWords[0].sentence_id, String(message.partner_comment || ""));
+          await broadcastStatus("idle", "已保存并已尝试分享给搭子");
+        } catch (error) {
+          shareError = String(error?.message || error);
+        }
+      }
       sendResponse({
         ok: true,
         count: updated.length,
         created_count: savedWords.length,
-        skipped_count: Math.max(0, words.length - savedWords.length)
+        skipped_count: Math.max(0, words.length - savedWords.length),
+        share_error: shareError
       });
       return;
     }
@@ -907,7 +964,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const saved = await postSentence({ ...sentence, source: sentence.source || "manual" });
       releaseCaptureLock();
       await broadcastStatus("idle", "句子已保存");
-      sendResponse({ ok: true, sentence: saved });
+      let shareError = "";
+      if (Boolean(message.share_to_partner) && saved?.id) {
+        try {
+          await postShareSentence(saved.id, String(message.partner_comment || ""));
+          await broadcastStatus("idle", "句子已保存并尝试分享给搭子");
+        } catch (error) {
+          shareError = String(error?.message || error);
+        }
+      }
+      sendResponse({ ok: true, sentence: saved, share_error: shareError });
       return;
     }
 
