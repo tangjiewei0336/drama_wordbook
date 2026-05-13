@@ -1,4 +1,4 @@
-# Drama Wordbook Desktop
+# UNI Desktop
 
 Electron + React desktop shell for browsing vocabulary saved by the local sidecar.
 

@@ -11,6 +11,9 @@ const sidecarPort = 17321;
 const sidecarBaseUrl = `http://${sidecarHost}:${sidecarPort}`;
 const maxLogEntries = 800;
 const sharePollIntervalMs = 60_000;
+const appIconPath = path.join(__dirname, "..", "resources", "icon.png");
+
+app.setName("UNI");
 
 let sidecarProcess = null;
 let sidecarStopping = false;
@@ -114,7 +117,7 @@ async function pollShareNotifications() {
     if (newReplyCount) pieces.push(`${newReplyCount} 条新评论`);
     if (!pieces.length || !Notification.isSupported()) return;
     new Notification({
-      title: "Drama Wordbook",
+      title: "UNI",
       body: `${pieces.join("，")}，点击应用查看`,
       silent: false,
     }).show();
@@ -222,6 +225,15 @@ function resolveBundledSidecarCommand(sidecarDir) {
   ];
   const executable = candidates.find(isExecutableFile);
   return executable ? { command: executable, args: [], cwd: path.dirname(executable) } : null;
+}
+
+function resolveSidecarDataDir() {
+  const nextSidecarDataDir = path.join(app.getPath("userData"), "sidecar-data");
+  const legacySidecarDataDir = path.join(app.getPath("appData"), "Drama Wordbook", "sidecar-data");
+  if (fs.existsSync(legacySidecarDataDir) && !fs.existsSync(nextSidecarDataDir)) {
+    return legacySidecarDataDir;
+  }
+  return nextSidecarDataDir;
 }
 
 function publishSidecarStatus(next) {
@@ -356,10 +368,8 @@ async function startSidecar() {
   });
 
   // Persist user data outside the app bundle so reinstalls/auto-updates do not
-  // wipe the local sqlite DB and screenshots. The directory follows Electron's
-  // platform convention via app.getPath("userData").
-  const userDataDir = app.getPath("userData");
-  const sidecarDataDir = path.join(userDataDir, "sidecar-data");
+  // wipe the local sqlite DB and screenshots.
+  const sidecarDataDir = process.env.DRAMA_WORDBOOK_DATA_DIR || resolveSidecarDataDir();
   try {
     fs.mkdirSync(sidecarDataDir, { recursive: true });
   } catch (error) {
@@ -472,7 +482,8 @@ function createWindow() {
     height: 820,
     minWidth: 980,
     minHeight: 660,
-    title: "Drama Wordbook",
+    title: "UNI",
+    icon: appIconPath,
     backgroundColor: "#f7f8fb",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     trafficLightPosition: { x: 18, y: 18 },

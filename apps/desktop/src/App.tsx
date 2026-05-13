@@ -1,5 +1,4 @@
 import {
-  BookOpen,
   Brain,
   CalendarClock,
   ChevronDown,
@@ -29,6 +28,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import uniLogo from "./assets/uni-logo.png";
 import {
   fetchAsrStatus,
   deletePlayerGroup,
@@ -2199,10 +2199,10 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">
-            <BookOpen size={22} />
+            <img src={uniLogo} alt="" />
           </div>
           <div>
-            <h1>Drama Wordbook</h1>
+            <h1>UNI</h1>
             <p>看剧生词、例句和剧照工作台</p>
           </div>
         </div>
