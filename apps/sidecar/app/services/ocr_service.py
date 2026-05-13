@@ -129,6 +129,36 @@ def _normalize_lang(lang: str | None) -> str:
     return text or _default_ocr_lang()
 
 
+_ANALYSIS_CONFIG_PATCHED = False
+
+
+def _patch_paddle_analysis_config() -> None:
+    """PaddleX static inference calls ``AnalysisConfig.set_optimization_level(3)``.
+
+    That API exists on paddle 3.0–3.2 but is missing on 2.6.x (too old) and on
+    3.3+ (removed / PIR refactor). Add a no-op when absent so OCR pipelines still
+    start; quality impact for subtitle OCR is negligible.
+    """
+    global _ANALYSIS_CONFIG_PATCHED
+    if _ANALYSIS_CONFIG_PATCHED:
+        return
+    _ANALYSIS_CONFIG_PATCHED = True
+    try:
+        import paddle.base.libpaddle as _lp  # type: ignore[import-not-found]
+
+        cfg_cls = getattr(_lp, "AnalysisConfig", None)
+        if cfg_cls is None or hasattr(cfg_cls, "set_optimization_level"):
+            return
+
+        def set_optimization_level(self, level: int = 3) -> None:  # noqa: ARG002
+            return None
+
+        setattr(cfg_cls, "set_optimization_level", set_optimization_level)
+        logger.info("Applied AnalysisConfig.set_optimization_level compatibility shim (paddle+paddlex).")
+    except Exception as exc:
+        logger.debug("AnalysisConfig shim skipped: %s", exc)
+
+
 @lru_cache(maxsize=8)
 def get_ocr_engine_for_lang(lang: str):
     """Return (and cache) a PaddleOCR engine instance for the given language.
@@ -140,6 +170,7 @@ def get_ocr_engine_for_lang(lang: str):
     """
     if PaddleOCR is None:
         return None
+    _patch_paddle_analysis_config()
     try:
         return PaddleOCR(
             lang=lang,
@@ -149,10 +180,17 @@ def get_ocr_engine_for_lang(lang: str):
         )
     except Exception as exc:  # pragma: no cover - env specific
         logger.exception("PaddleOCR initialization failed (lang=%s)", lang)
+        hint = ""
+        if "set_optimization_level" in str(exc):
+            hint = (
+                " 若错误含 set_optimization_level：请安装 paddlepaddle 3.0.x–3.2.x（勿用 3.3+），"
+                "或升级侧车到已带兼容 shim 的版本后重试。"
+            )
         raise RuntimeError(
-            f"PaddleOCR failed to start: {type(exc).__name__}: {exc} (lang={lang!r}). "
-            "If using a venv, reinstall: cd apps/sidecar && pip install -e . "
-            "(expects paddleocr>=3.0,<4 with paddlex[ocr-core] and paddlepaddle>=3.0)."
+            f"PaddleOCR failed to start: {type(exc).__name__}: {exc} (lang={lang!r})."
+            + hint
+            + " 开发环境可执行: cd apps/sidecar && pip install -e . "
+            + "(paddleocr>=3,<4, paddlex[ocr-core]>=3.5,<3.6, paddlepaddle>=3,<3.3)。"
         ) from exc
 
 

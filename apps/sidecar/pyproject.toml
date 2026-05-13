@@ -15,7 +15,10 @@ dependencies = [
   # models. Packaging caveats are addressed by sidecar.spec collecting paddlex
   # data + Cython resource templates.
   "paddleocr>=3.0.0,<4.0.0",
-  "paddlepaddle>=3.0.0",
+  # PaddleX 3.5 calls AnalysisConfig.set_optimization_level(); it exists on
+  # paddle 3.0–3.2.x but was removed again in 3.3+ (AttributeError). Pin below
+  # 3.3 until upstream aligns; see ocr_service._patch_paddle_analysis_config().
+  "paddlepaddle>=3.0.0,<3.3.0",
   # PaddleOCR 3.x routes through PaddleX pipelines; without the OCR extra,
   # `PaddleOCR(...)` init fails with "A dependency error occurred during
   # pipeline creation".
