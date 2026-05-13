@@ -78,7 +78,7 @@ function toHotkeyCode(keyValue) {
 function collectSettingsFromForm() {
   const top = clamp(Number(els.subtitleBandTopRatio.value), 0, 1);
   const bottom = clamp(Number(els.subtitleBandBottomRatio.value), 0, 1);
-  const split = clamp(Number(els.subtitleSplitRatio.value), 0.2, 0.8);
+  const split = clamp(Number(els.subtitleSplitRatio.value), 0.2, 0.9);
   return {
     sidecarBaseUrl: normalizeSidecarBaseUrl(els.sidecarBaseUrl.value),
     subtitleBandOnly: els.subtitleBandOnly.checked,

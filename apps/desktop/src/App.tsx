@@ -67,8 +67,10 @@ import {
   startAsrModelLoad,
   tokenizeJapanese,
   updateSentence,
+  updateAsrSettings,
   updateDesktopSettings,
   updateSyncConfig,
+  updateVocabItemText,
   type AsrModelStatus,
   type DictLookupResult,
   type DesktopSettings,
@@ -228,6 +230,136 @@ function speakJapanese(text = "") {
   window.speechSynthesis.speak(utterance);
 }
 
+function kanaBeforeRu(word: string): string {
+  return word.length >= 2 ? word.charAt(word.length - 2) : "";
+}
+
+function isLikelyIchidanVerb(word: string): boolean {
+  return word.endsWith("る") && /[いきしちにひみりゐえけせてねへめれゑぎじぢびぴげぜでべぺ]/.test(kanaBeforeRu(word));
+}
+
+function commonFormsForWord(word = "", pos = ""): Array<{ label: string; value: string }> {
+  const base = word.trim();
+  if (!base) return [];
+  const posText = pos.trim();
+  const isVerb = posText.includes("动词");
+  const isIAdjective = posText.includes("形容词");
+  const isNominal = posText.includes("形状词") || posText.includes("名词");
+  if (base === "する" || base.endsWith("する")) {
+    const stem = base === "する" ? "" : base.slice(0, -2);
+    return [
+      { label: "て形", value: `${stem}して` },
+      { label: "命令形", value: `${stem}しろ / ${stem}せよ` },
+      { label: "ない形", value: `${stem}しない` },
+      { label: "ます形", value: `${stem}します` },
+      { label: "た形", value: `${stem}した` },
+    ];
+  }
+  if (base === "来る" || base === "くる") {
+    const kanji = base === "来る";
+    return [
+      { label: "て形", value: kanji ? "来て（きて）" : "きて" },
+      { label: "命令形", value: kanji ? "来い（こい）" : "こい" },
+      { label: "ない形", value: kanji ? "来ない（こない）" : "こない" },
+      { label: "ます形", value: kanji ? "来ます（きます）" : "きます" },
+      { label: "た形", value: kanji ? "来た（きた）" : "きた" },
+    ];
+  }
+  if (base === "いい") {
+    return [
+      { label: "て形", value: "よくて" },
+      { label: "过去形", value: "よかった" },
+      { label: "否定形", value: "よくない" },
+      { label: "条件形", value: "よければ" },
+    ];
+  }
+  if (isIAdjective || (!posText && base.endsWith("い") && base !== "いい" && !base.endsWith("ない"))) {
+    const stem = base.slice(0, -1);
+    return [
+      { label: "て形", value: `${stem}くて` },
+      { label: "过去形", value: `${stem}かった` },
+      { label: "否定形", value: `${stem}くない` },
+      { label: "条件形", value: `${stem}ければ` },
+    ];
+  }
+  if (isNominal || (!posText && base.endsWith("だ"))) {
+    const nominal = base.endsWith("だ") ? base.slice(0, -1) || base : base;
+    return [
+      { label: "て形", value: `${nominal}で` },
+      { label: "过去形", value: `${nominal}だった` },
+      { label: "否定形", value: `${nominal}ではない` },
+      { label: "条件形", value: `${nominal}なら` },
+    ];
+  }
+  if ((isVerb || !posText) && base.endsWith("る") && isLikelyIchidanVerb(base)) {
+    const stem = base.slice(0, -1);
+    return [
+      { label: "て形", value: `${stem}て` },
+      { label: "命令形", value: `${stem}ろ` },
+      { label: "ない形", value: `${stem}ない` },
+      { label: "ます形", value: `${stem}ます` },
+      { label: "た形", value: `${stem}た` },
+    ];
+  }
+  const godan: Record<string, { te: string; ta: string; imperative: string; nai: string; masu: string }> = {
+    う: { te: "って", ta: "った", imperative: "え", nai: "わない", masu: "います" },
+    つ: { te: "って", ta: "った", imperative: "て", nai: "たない", masu: "ちます" },
+    る: { te: "って", ta: "った", imperative: "れ", nai: "らない", masu: "ります" },
+    む: { te: "んで", ta: "んだ", imperative: "め", nai: "まない", masu: "みます" },
+    ぶ: { te: "んで", ta: "んだ", imperative: "べ", nai: "ばない", masu: "びます" },
+    ぬ: { te: "んで", ta: "んだ", imperative: "ね", nai: "なない", masu: "にます" },
+    く: { te: "いて", ta: "いた", imperative: "け", nai: "かない", masu: "きます" },
+    ぐ: { te: "いで", ta: "いだ", imperative: "げ", nai: "がない", masu: "ぎます" },
+    す: { te: "して", ta: "した", imperative: "せ", nai: "さない", masu: "します" },
+  };
+  const ending = base.slice(-1);
+  const rule = godan[ending];
+  if ((isVerb || !posText) && rule) {
+    const stem = base.slice(0, -1);
+    return [
+      { label: "て形", value: `${stem}${rule.te}` },
+      { label: "命令形", value: `${stem}${rule.imperative}` },
+      { label: "ない形", value: `${stem}${rule.nai}` },
+      { label: "ます形", value: `${stem}${rule.masu}` },
+      { label: "た形", value: `${stem}${rule.ta}` },
+    ];
+  }
+  if (posText && !isVerb && !isIAdjective && !isNominal) return [];
+  return [
+    { label: "丁寧形", value: `${base}です` },
+    { label: "否定形", value: `${base}ではない` },
+    { label: "过去形", value: `${base}だった` },
+  ];
+}
+
+function inferDictionaryFormForForms(word = "", pos = "", onlineLemma = ""): string {
+  const lemma = onlineLemma.trim();
+  if (lemma) return lemma;
+  const base = word.trim();
+  if (!base) return "";
+  if (pos.includes("动词") && base.endsWith("します") && base.length > 3) {
+    return `${base.slice(0, -3)}する`;
+  }
+  if (pos.includes("动词") && base.endsWith("ます") && base.length > 2) {
+    const stem = base.slice(0, -2);
+    const masuStemMap: Record<string, string> = {
+      い: "う",
+      き: "く",
+      ぎ: "ぐ",
+      し: "す",
+      ち: "つ",
+      に: "ぬ",
+      び: "ぶ",
+      み: "む",
+      り: "る",
+    };
+    const last = stem.slice(-1);
+    const ending = masuStemMap[last];
+    if (ending) return `${stem.slice(0, -1)}${ending}`;
+  }
+  return base;
+}
+
 async function imageUrlToDataUrl(url: string): Promise<string> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Avatar fetch failed: ${res.status}`);
@@ -293,8 +425,17 @@ export default function App() {
   const [selectedTokenLookup, setSelectedTokenLookup] = useState<DictLookupResult | null>(null);
   const [definitionOnlineLookup, setDefinitionOnlineLookup] = useState<DictLookupResult | null>(null);
   const [definitionLookupBusy, setDefinitionLookupBusy] = useState(false);
+  const [selectedWordPos, setSelectedWordPos] = useState("");
   const [sentenceBusy, setSentenceBusy] = useState(false);
   const [editingSentence, setEditingSentence] = useState(false);
+  const [editingVocabItem, setEditingVocabItem] = useState<VocabItem | null>(null);
+  const [vocabEditForm, setVocabEditForm] = useState({
+    surface: "",
+    dictionary_form: "",
+    reading: "",
+    jlpt_level: "",
+    meanings: "",
+  });
   const [sharingSentence, setSharingSentence] = useState(false);
   const [shareComment, setShareComment] = useState("");
   const [replyDraftByShare, setReplyDraftByShare] = useState<Record<number, string>>({});
@@ -308,6 +449,7 @@ export default function App() {
   const [exportExcelError, setExportExcelError] = useState("");
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [search, setSearch] = useState("");
+  const [timeDateFilter, setTimeDateFilter] = useState("");
   const [avatarSelectingId, setAvatarSelectingId] = useState("");
   const [selectedPresetAvatarId, setSelectedPresetAvatarId] = useState("");
   const [partnerRequestName, setPartnerRequestName] = useState("");
@@ -459,16 +601,51 @@ export default function App() {
 
   const filteredTimeItems = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return timeItems;
-    return timeItems.filter((item) =>
-      [item.surface, item.reading, item.meanings.join(" "), item.example_ja, item.example_zh, item.playback?.title]
+    return timeItems.filter((item) => {
+      const matchesDate = !timeDateFilter || item.created_at.slice(0, 10) === timeDateFilter;
+      if (!matchesDate) return false;
+      if (!q) return true;
+      return [item.surface, item.reading, item.meanings.join(" "), item.example_ja, item.example_zh, item.playback?.title]
         .join(" ")
         .toLowerCase()
-        .includes(q)
-    );
-  }, [timeItems, search]);
+        .includes(q);
+    });
+  }, [timeItems, search, timeDateFilter]);
+
+  const timeDateCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    timeItems.forEach((item) => {
+      const day = item.created_at.slice(0, 10);
+      if (day) counts.set(day, (counts.get(day) || 0) + 1);
+    });
+    return counts;
+  }, [timeItems]);
+
+  const timeDateOptions = useMemo(() => {
+    const dates = Array.from(timeDateCounts.keys()).sort();
+    const latest = dates.length ? dates[dates.length - 1] : new Date().toISOString().slice(0, 10);
+    const start = new Date(latest);
+    start.setDate(start.getDate() - 29);
+    return Array.from({ length: 30 }, (_, index) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + index);
+      const key = d.toISOString().slice(0, 10);
+      return { key, count: timeDateCounts.get(key) || 0 };
+    }).reverse();
+  }, [timeDateCounts]);
 
   const selectedTitle = selectedItems[0]?.surface || "未选择词条";
+  const selectedWordFormBase = useMemo(() => {
+    const head = selectedItems[0];
+    return inferDictionaryFormForForms(
+      head?.dictionary_form || head?.surface || "",
+      selectedWordPos,
+      definitionOnlineLookup?.lemma || ""
+    );
+  }, [definitionOnlineLookup?.lemma, selectedItems, selectedWordPos]);
+  const selectedWordForms = useMemo(() => {
+    return commonFormsForWord(selectedWordFormBase, selectedWordPos);
+  }, [selectedWordFormBase, selectedWordPos]);
 
   const definitionLookupKey = useMemo(() => {
     if (!selectedHeadId || !selectedItems.length) return "";
@@ -505,6 +682,28 @@ export default function App() {
       cancelled = true;
     };
   }, [definitionLookupKey]);
+
+  useEffect(() => {
+    const head = selectedItems[0];
+    const text = String(head?.dictionary_form || head?.surface || "").trim();
+    if (!text) {
+      setSelectedWordPos("");
+      return;
+    }
+    let cancelled = false;
+    tokenizeJapanese(text)
+      .then((tokens) => {
+        if (cancelled) return;
+        const exact = tokens.find((token) => token.dictionary_form === text || token.surface === text) || tokens[0];
+        setSelectedWordPos(exact?.pos || "");
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedWordPos("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedItems]);
 
   const sourceStats = useMemo(() => {
     const items = selectedSource?.items || [];
@@ -658,6 +857,52 @@ export default function App() {
     }
   }
 
+  function openVocabEditPopup(item: VocabItem) {
+    const onlineLemma = definitionOnlineLookup?.lemma?.trim() || "";
+    setEditingVocabItem(item);
+    setVocabEditForm({
+      surface: item.surface || "",
+      dictionary_form: onlineLemma || item.dictionary_form || item.surface || "",
+      reading: item.reading || "",
+      jlpt_level: item.jlpt_level || "",
+      meanings: (item.meanings || []).join("；"),
+    });
+  }
+
+  async function onSaveVocabEdit() {
+    if (!editingVocabItem) return;
+    const surface = vocabEditForm.surface.trim();
+    const dictionaryForm = vocabEditForm.dictionary_form.trim() || surface;
+    if (!surface) {
+      setLibraryError("词面不能为空。");
+      return;
+    }
+    setLoading(true);
+    setLibraryError("");
+    try {
+      const updated = await updateVocabItemText(editingVocabItem.id, editingVocabItem.example_ja, editingVocabItem.example_zh, {
+        surface,
+        dictionary_form: dictionaryForm,
+        reading: vocabEditForm.reading.trim(),
+        jlpt_level: vocabEditForm.jlpt_level.trim(),
+        meanings: vocabEditForm.meanings
+          .split(/[\n;；]/)
+          .map((item) => item.trim())
+          .filter(Boolean),
+      });
+      const [nodes, timeList] = await Promise.all([fetchByPlayer(), fetchByTime()]);
+      setPlayerNodes(nodes);
+      setTimeItems(timeList);
+      setSelectedHeadId(updated.head_id);
+      setSelectedItems(await fetchHeadItems(updated.head_id));
+      setEditingVocabItem(null);
+    } catch (err) {
+      setLibraryError(String((err as Error).message || err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function onRestartSidecar() {
     setLibraryError("");
     await window.wordbookDesktop?.restartSidecar?.();
@@ -669,6 +914,17 @@ export default function App() {
     try {
       setAsrStatus(await startAsrModelLoad());
       setView("runtime");
+    } catch (err) {
+      setLibraryError(String((err as Error).message || err));
+    }
+  }
+
+  async function onToggleAsrHfMirror(enabled: boolean) {
+    setLibraryError("");
+    try {
+      const settings = await updateAsrSettings({ hf_mirror_enabled: enabled });
+      const status = await fetchAsrStatus();
+      setAsrStatus({ ...status, hf_mirror_enabled: settings.hf_mirror_enabled });
     } catch (err) {
       setLibraryError(String((err as Error).message || err));
     }
@@ -1112,7 +1368,35 @@ export default function App() {
 
     return (
       <div className="timeline">
-        {filteredTimeItems.map((item) => (
+        <div className="timeline-date-filter">
+          <label>
+            <span>日期</span>
+            <input
+              type="date"
+              value={timeDateFilter}
+              onChange={(event) => setTimeDateFilter(event.target.value)}
+            />
+          </label>
+          <button type="button" className="source-tool-button" onClick={() => setTimeDateFilter("")} disabled={!timeDateFilter}>
+            全部
+          </button>
+        </div>
+        <div className="date-chip-row">
+          {timeDateOptions.map((day) => (
+            <button
+              type="button"
+              key={day.key}
+              className={`date-chip ${timeDateFilter === day.key ? "active" : ""}`}
+              disabled={!day.count}
+              onClick={() => setTimeDateFilter(day.key)}
+              title={day.count ? `${day.key} · ${day.count} 条词条` : `${day.key} · 暂无词条`}
+            >
+              <span>{day.key.slice(5)}</span>
+              <small>{day.count || "无"}</small>
+            </button>
+          ))}
+        </div>
+        {filteredTimeItems.length ? filteredTimeItems.map((item) => (
           <button
             key={detailKey(item)}
             className={`timeline-item ${selectedHeadId === item.head_id ? "active" : ""}`}
@@ -1121,7 +1405,7 @@ export default function App() {
             <span className="timeline-word">{item.surface}</span>
             <span className="timeline-meta">{formatDate(item.created_at)}</span>
           </button>
-        ))}
+        )) : <div className="empty">这一天还没有词条。</div>}
       </div>
     );
   }
@@ -1170,7 +1454,19 @@ export default function App() {
               <p>
                 compute: {asrStatus?.compute_type || "-"} · local only: {String(asrStatus?.local_files_only || false)}
               </p>
+              <p>
+                HF endpoint: {asrStatus?.hf_endpoint || "official"}
+              </p>
             </div>
+            <label className="setting-toggle runtime-toggle">
+              <span>使用 hf-mirror 下载</span>
+              <input
+                type="checkbox"
+                checked={asrStatus?.hf_mirror_enabled ?? true}
+                onChange={(event) => onToggleAsrHfMirror(event.target.checked)}
+                disabled={loadState === "loading"}
+              />
+            </label>
             {progress ? (
               <div className="model-progress">
                 <div className="progress-track">
@@ -2378,9 +2674,33 @@ export default function App() {
                     <button className="icon-button word-speak-button" onClick={() => speakJapanese(selectedItems[0]?.dictionary_form || selectedTitle)} title="朗读词语">
                       <Volume2 size={15} />
                     </button>
+                    <button className="icon-button word-speak-button" onClick={() => openVocabEditPopup(selectedItems[0])} title="修改词条">
+                      <Pencil size={15} />
+                    </button>
                   </div>
                   <p className="muted wordbook-definition-hint">你在保存词语时填写的释义已显示在每个「例句」卡片中。</p>
                 </>
+              )}
+            </section>
+            <section className="word-forms-panel">
+              <div className="section-title">
+                <Brain size={17} />
+                <span>常见变形</span>
+                {selectedWordPos ? <em className="word-pos-hint">{selectedWordPos}</em> : null}
+              </div>
+              {!selectedItems.length ? (
+                <div className="empty centered">选择词条后显示常见变形。</div>
+              ) : selectedWordForms.length ? (
+                <div className="word-form-list">
+                  {selectedWordForms.map((form) => (
+                    <div className="word-form-row" key={`${form.label}-${form.value}`}>
+                      <span>{form.label}</span>
+                      <strong>{form.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty centered">暂无可推断的变形。</div>
               )}
             </section>
           </div> : null}
@@ -2435,6 +2755,53 @@ export default function App() {
               ))}
             </div>
           </section> : null}
+          {editingVocabItem ? (
+            <div className="modal-backdrop" role="dialog" aria-modal="true">
+              <div className="sentence-edit-modal">
+                <div className="modal-header">
+                  <div className="section-title">
+                    <Pencil size={17} />
+                    <span>修改词条</span>
+                  </div>
+                  <button className="icon-button" onClick={() => setEditingVocabItem(null)} title="关闭">
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="sentence-editor">
+                  <label>
+                    <span>词面</span>
+                    <input value={vocabEditForm.surface} onChange={(event) => setVocabEditForm({ ...vocabEditForm, surface: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>原形</span>
+                    <input value={vocabEditForm.dictionary_form} onChange={(event) => setVocabEditForm({ ...vocabEditForm, dictionary_form: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>读音</span>
+                    <input value={vocabEditForm.reading} onChange={(event) => setVocabEditForm({ ...vocabEditForm, reading: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>JLPT</span>
+                    <input placeholder="N1 / N2 / N3..." value={vocabEditForm.jlpt_level} onChange={(event) => setVocabEditForm({ ...vocabEditForm, jlpt_level: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>释义</span>
+                    <textarea value={vocabEditForm.meanings} onChange={(event) => setVocabEditForm({ ...vocabEditForm, meanings: event.target.value })} />
+                  </label>
+                </div>
+                <div className="sentence-actions modal-actions">
+                  <button className="runtime-action" onClick={onSaveVocabEdit} disabled={loading}>
+                    <Save size={16} />
+                    <span>保存修改</span>
+                  </button>
+                  <button className="runtime-action secondary" onClick={() => setEditingVocabItem(null)}>
+                    <X size={16} />
+                    <span>取消</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
           </>
           ) : null}
           </>

@@ -36,6 +36,10 @@ class FakeTokenizer:
 
 
 class TokenizerServiceTest(unittest.TestCase):
+    def test_normalize_ocr_small_tsu_only_in_conservative_contexts(self):
+        self.assertEqual(tokenizer_service.normalize_ocr_small_tsu("待つて 行つた こつち"), "待って 行った こっち")
+        self.assertEqual(tokenizer_service.normalize_ocr_small_tsu("いつか いつも"), "いつか いつも")
+
     def test_tokenize_keeps_shimashita_as_verb_chain(self):
         with patch.object(tokenizer_service, "get_tokenizer", return_value=FakeTokenizer()):
             tokens = tokenizer_service.tokenize_ja("しました")
