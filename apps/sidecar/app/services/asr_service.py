@@ -25,7 +25,8 @@ ASR_COMPUTE_TYPE = os.getenv("ASR_COMPUTE_TYPE", "int8")
 ASR_PRELOAD = os.getenv("ASR_PRELOAD", "0") == "1"
 ASR_MODEL_DOWNLOAD_ROOT = os.getenv("ASR_MODEL_DOWNLOAD_ROOT", "")
 ASR_LOCAL_FILES_ONLY = os.getenv("ASR_LOCAL_FILES_ONLY", "0") == "1"
-ASR_HF_ENDPOINT = os.getenv("ASR_HF_ENDPOINT", "").strip()
+ASR_HF_ENDPOINT = os.getenv("ASR_HF_ENDPOINT", "https://hf-mirror.com").strip()
+ASR_HF_MIRROR_ENABLED = os.getenv("ASR_HF_MIRROR_ENABLED", "1") != "0"
 ASR_MODEL_TOTAL_BYTES = {
     "tiny": 78_200_000,
     "base": 147_900_000,
@@ -40,6 +41,16 @@ _model_load_state = {
     "finished_at": None,
     "error": "",
 }
+
+
+def set_hf_mirror_enabled(enabled: bool) -> None:
+    global ASR_HF_MIRROR_ENABLED
+    ASR_HF_MIRROR_ENABLED = bool(enabled)
+    if ASR_HF_MIRROR_ENABLED:
+        if ASR_HF_ENDPOINT:
+            os.environ["HF_ENDPOINT"] = ASR_HF_ENDPOINT
+    elif os.getenv("HF_ENDPOINT") == ASR_HF_ENDPOINT:
+        os.environ.pop("HF_ENDPOINT", None)
 
 
 def _empty_transcript(language: str) -> dict:
@@ -116,8 +127,8 @@ def _download_progress(loaded: bool) -> dict:
 
 
 def _configure_hf_endpoint() -> None:
-    # Users in some regions may opt into a mirror via ASR_HF_ENDPOINT.
-    if ASR_HF_ENDPOINT and not os.getenv("HF_ENDPOINT"):
+    # Default to hf-mirror for easier first-time downloads; users can disable it in settings.
+    if ASR_HF_MIRROR_ENABLED and ASR_HF_ENDPOINT and not os.getenv("HF_ENDPOINT"):
         os.environ["HF_ENDPOINT"] = ASR_HF_ENDPOINT
 
 
@@ -222,7 +233,8 @@ def get_asr_status() -> dict:
         "compute_type": ASR_COMPUTE_TYPE,
         "download_root": ASR_MODEL_DOWNLOAD_ROOT,
         "local_files_only": ASR_LOCAL_FILES_ONLY,
-        "hf_endpoint": os.getenv("HF_ENDPOINT", "") or ASR_HF_ENDPOINT,
+        "hf_endpoint": os.getenv("HF_ENDPOINT", "") or (ASR_HF_ENDPOINT if ASR_HF_MIRROR_ENABLED else ""),
+        "hf_mirror_enabled": ASR_HF_MIRROR_ENABLED,
         "load_state": load_state,
         "download_progress": progress,
     }

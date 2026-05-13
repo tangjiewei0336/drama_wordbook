@@ -57,6 +57,7 @@ export type HealthStatus = {
     download_root?: string;
     local_files_only?: boolean;
     hf_endpoint?: string;
+    hf_mirror_enabled?: boolean;
     load_state?: {
       state: string;
       started_at: string | null;
@@ -73,6 +74,10 @@ export type HealthStatus = {
 };
 
 export type AsrModelStatus = NonNullable<HealthStatus["asr"]>;
+
+export type AsrSettings = {
+  hf_mirror_enabled: boolean;
+};
 
 export type SidecarProcessStatus = {
   state: string;
@@ -227,6 +232,16 @@ export async function startAsrModelLoad(): Promise<AsrModelStatus> {
     throw new Error(await parseApiError(res, `Model load failed: ${res.status}`));
   }
   return (await res.json()) as AsrModelStatus;
+}
+
+export async function updateAsrSettings(payload: Partial<AsrSettings>): Promise<AsrSettings> {
+  const res = await fetch(`${SIDECAR_BASE}/asr/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `更新 ASR 设置失败（${res.status}）`));
+  return (await res.json()) as AsrSettings;
 }
 
 export async function fetchByPlayer(): Promise<PlayerNode[]> {
@@ -446,11 +461,16 @@ export async function deleteVocabItem(itemId: number): Promise<void> {
   }
 }
 
-export async function updateVocabItemText(itemId: number, exampleJa: string, exampleZh: string): Promise<VocabItem> {
+export async function updateVocabItemText(
+  itemId: number,
+  exampleJa: string,
+  exampleZh: string,
+  patch: Partial<Pick<VocabItem, "surface" | "dictionary_form" | "reading" | "jlpt_level" | "meanings">> = {}
+): Promise<VocabItem> {
   const res = await fetch(`${SIDECAR_BASE}/vocab/items/${itemId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ example_ja: exampleJa, example_zh: exampleZh }),
+    body: JSON.stringify({ example_ja: exampleJa, example_zh: exampleZh, ...patch }),
   });
   if (!res.ok) {
     throw new Error(await parseApiError(res, `更新失败（${res.status}）`));

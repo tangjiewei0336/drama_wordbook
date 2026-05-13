@@ -95,8 +95,8 @@ class VocabAddItem(BaseModel):
     source: str = "manual"
     meanings: list[str] = Field(default_factory=list)
     skip_enrichment: bool = False
-    example_ja: str = ""
-    example_zh: str = ""
+    example_ja: str | None = None
+    example_zh: str | None = None
     tags: list[str] = Field(default_factory=list)
     screenshot_base64: str | None = None
     playback: VocabPlayback | None = None
@@ -153,6 +153,11 @@ class VocabByTimeResponse(BaseModel):
 
 
 class VocabUpdateItemRequest(BaseModel):
+    surface: str | None = None
+    dictionary_form: str | None = None
+    reading: str | None = None
+    jlpt_level: str | None = None
+    meanings: list[str] | None = None
     example_ja: str = ""
     example_zh: str = ""
     tags: list[str] | None = None
@@ -222,6 +227,14 @@ class DesktopSettings(BaseModel):
 class DesktopSettingsUpdateRequest(BaseModel):
     notification_window_start: str | None = None
     notification_window_end: str | None = None
+
+
+class AsrSettings(BaseModel):
+    hf_mirror_enabled: bool = True
+
+
+class AsrSettingsUpdateRequest(BaseModel):
+    hf_mirror_enabled: bool | None = None
 
 
 class SyncLoginRequest(BaseModel):

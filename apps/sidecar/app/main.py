@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse, Response
 
 from app.models.schemas import (
     AsrChunk,
+    AsrSettings,
+    AsrSettingsUpdateRequest,
     AsrTranscribeRequest,
     AsrTranscribeResponse,
     DesktopSettings,
@@ -56,6 +58,7 @@ from app.services.export_service import build_wordbook_xlsx_bytes
 from app.services.asr_service import (
     get_asr_status,
     preload_asr_model,
+    set_hf_mirror_enabled,
     start_asr_model_load,
     transcribe_audio_chunk,
 )
@@ -82,6 +85,7 @@ from app.services.vocab_service import (
     get_activity,
     get_by_player,
     get_by_time,
+    get_asr_settings,
     get_profile,
     get_desktop_settings,
     get_partner_state,
@@ -108,6 +112,7 @@ from app.services.vocab_service import (
     resolve_sync_conflict,
     save_profile,
     save_desktop_settings,
+    save_asr_settings,
     save_sync_config,
     schedule_sync,
     collect_shared_sentence,
@@ -132,6 +137,7 @@ logger = logging.getLogger("wordbook.sidecar")
 @app.on_event("startup")
 def on_startup():
     init_db()
+    set_hf_mirror_enabled(get_asr_settings().get("hf_mirror_enabled", True))
     preload_asr_model()
 
 
@@ -291,7 +297,16 @@ def vocab_delete_item(item_id: int):
 
 @app.patch("/vocab/items/{item_id}", response_model=VocabItem)
 def vocab_update_item(item_id: int, payload: VocabUpdateItemRequest):
-    if not update_item_text(item_id, payload.example_ja, payload.example_zh):
+    if not update_item_text(
+        item_id,
+        payload.example_ja,
+        payload.example_zh,
+        surface=payload.surface,
+        dictionary_form=payload.dictionary_form,
+        reading=payload.reading,
+        jlpt_level=payload.jlpt_level,
+        meanings=payload.meanings,
+    ):
         raise HTTPException(status_code=404, detail="item not found")
     items = [x for x in get_by_time() if int(x["id"]) == item_id]
     if not items:
@@ -533,12 +548,26 @@ def asr_transcribe(payload: AsrTranscribeRequest):
 
 @app.get("/asr/status")
 def asr_status():
+    set_hf_mirror_enabled(get_asr_settings().get("hf_mirror_enabled", True))
     return get_asr_status()
 
 
 @app.post("/asr/model/load")
 def asr_model_load():
+    set_hf_mirror_enabled(get_asr_settings().get("hf_mirror_enabled", True))
     return start_asr_model_load()
+
+
+@app.get("/asr/settings", response_model=AsrSettings)
+def asr_settings_get():
+    return AsrSettings(**get_asr_settings())
+
+
+@app.patch("/asr/settings", response_model=AsrSettings)
+def asr_settings_patch(payload: AsrSettingsUpdateRequest):
+    settings = save_asr_settings({"hf_mirror_enabled": payload.hf_mirror_enabled})
+    set_hf_mirror_enabled(settings.get("hf_mirror_enabled", True))
+    return AsrSettings(**settings)
 
 
 @app.post("/review/start", response_model=ReviewStartResponse)

@@ -94,6 +94,9 @@ DEFAULT_DESKTOP_SETTINGS = {
     "notification_window_start": "18:00",
     "notification_window_end": "24:00",
 }
+DEFAULT_ASR_SETTINGS = {
+    "hf_mirror_enabled": True,
+}
 
 
 def _utc_now() -> str:
@@ -1025,17 +1028,62 @@ def delete_player_group(platform: str, source: str, series_name: str, episode_na
     return deleted
 
 
-def update_item_text(item_id: int, example_ja: str, example_zh: str) -> bool:
+def update_item_text(
+    item_id: int,
+    example_ja: str | None,
+    example_zh: str | None,
+    *,
+    surface: str | None = None,
+    dictionary_form: str | None = None,
+    reading: str | None = None,
+    jlpt_level: str | None = None,
+    meanings: list[str] | None = None,
+) -> bool:
     conn = _get_conn()
     try:
+        current = conn.execute(
+            """
+            SELECT i.*, h.dictionary_form AS current_dictionary_form
+            FROM vocab_item i
+            LEFT JOIN vocab_head h ON h.id = i.head_id
+            WHERE i.id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+        if not current:
+            return False
+        old_head_id = int(current["head_id"])
+        next_surface = str(surface if surface is not None else current["surface"] or "").strip()
+        next_dictionary_form = str(
+            dictionary_form if dictionary_form is not None else current["current_dictionary_form"] or current["surface"] or ""
+        ).strip() or next_surface
+        next_reading = str(reading if reading is not None else current["reading"] or "").strip()
+        next_jlpt_level = str(jlpt_level if jlpt_level is not None else current["jlpt_level"] or "").strip()
+        if not next_jlpt_level:
+            next_jlpt_level = lookup_jlpt_entry(next_dictionary_form, next_surface, next_reading).get("level", "")
+        if meanings is None:
+            next_meanings = current["meanings_json"] or "[]"
+        else:
+            clean_meanings = [str(m or "").strip() for m in meanings if str(m or "").strip()]
+            next_meanings = json.dumps(clean_meanings, ensure_ascii=False)
+        next_example_ja = str(example_ja if example_ja is not None else current["example_ja"] or "")
+        next_example_zh = str(example_zh if example_zh is not None else current["example_zh"] or "")
+        next_head_id = _upsert_head(conn, next_dictionary_form)
+        now = _utc_now()
         cur = conn.execute(
             """
             UPDATE vocab_item
-            SET example_ja = ?, example_zh = ?, updated_at = ?
+            SET head_id = ?, surface = ?, reading = ?, jlpt_level = ?, meanings_json = ?,
+                example_ja = ?, example_zh = ?, updated_at = ?, sync_status = 'pending'
             WHERE id = ?
             """,
-            (example_ja, example_zh, _utc_now(), item_id),
+            (next_head_id, next_surface, next_reading, next_jlpt_level, next_meanings, next_example_ja, next_example_zh, now, item_id),
         )
+        conn.execute("UPDATE vocab_head SET updated_at = ? WHERE id = ?", (now, next_head_id))
+        if old_head_id != next_head_id:
+            remaining = conn.execute("SELECT COUNT(*) AS count FROM vocab_item WHERE head_id = ?", (old_head_id,)).fetchone()
+            if int(remaining["count"] or 0) == 0:
+                conn.execute("DELETE FROM vocab_head WHERE id = ?", (old_head_id,))
         conn.commit()
         return cur.rowcount > 0
     finally:
@@ -1232,6 +1280,20 @@ def save_desktop_settings(settings: dict) -> dict:
         ),
     }
     return _set_setting("desktop_settings", next_settings)
+
+
+def get_asr_settings() -> dict:
+    raw = _get_setting("asr_settings", DEFAULT_ASR_SETTINGS)
+    return {"hf_mirror_enabled": bool(raw.get("hf_mirror_enabled", True))}
+
+
+def save_asr_settings(settings: dict) -> dict:
+    current = get_asr_settings()
+    enabled = settings.get("hf_mirror_enabled")
+    next_settings = {
+        "hf_mirror_enabled": current["hf_mirror_enabled"] if enabled is None else bool(enabled),
+    }
+    return _set_setting("asr_settings", next_settings)
 
 
 def _reset_sync_session(config: dict | None = None) -> dict:

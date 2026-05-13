@@ -24,6 +24,162 @@ let asrCaptureId = 0;
 let asrSendChunks = false;
 const autoWordFeedRecent = new Map();
 
+function parseMeaningsInput(value) {
+  return String(value || "")
+    .split(/[\n;；]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function showAutoWordEditPopup(word, onSaved) {
+  const existing = document.getElementById("wordbook-auto-word-edit-popup");
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.id = "wordbook-auto-word-edit-popup";
+  Object.assign(backdrop.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "2147483647",
+    display: "grid",
+    placeItems: "center",
+    padding: "18px",
+    background: "rgba(15,23,42,0.34)",
+    pointerEvents: "auto"
+  });
+  const modal = document.createElement("div");
+  Object.assign(modal.style, {
+    width: "min(420px, calc(100vw - 36px))",
+    borderRadius: "10px",
+    background: "rgba(255,255,255,0.96)",
+    border: "1px solid rgba(223,229,235,0.9)",
+    boxShadow: "0 24px 70px rgba(15,23,42,0.22)",
+    padding: "16px",
+    color: "#263241",
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+  });
+  const title = document.createElement("div");
+  title.textContent = "修改自动识别词条";
+  Object.assign(title.style, {
+    fontSize: "15px",
+    fontWeight: "900",
+    marginBottom: "12px"
+  });
+
+  const makeField = (labelText, value, multiline = false) => {
+    const label = document.createElement("label");
+    Object.assign(label.style, {
+      display: "grid",
+      gap: "5px",
+      marginBottom: "10px",
+      fontSize: "12px",
+      fontWeight: "800",
+      color: "#475467"
+    });
+    const labelSpan = document.createElement("span");
+    labelSpan.textContent = labelText;
+    const input = document.createElement(multiline ? "textarea" : "input");
+    input.value = value || "";
+    if (multiline) input.rows = 3;
+    Object.assign(input.style, {
+      width: "100%",
+      boxSizing: "border-box",
+      border: "1px solid #d0d5dd",
+      borderRadius: "8px",
+      padding: "9px 10px",
+      outline: "none",
+      font: "inherit",
+      fontSize: "13px",
+      color: "#263241",
+      resize: multiline ? "vertical" : "none"
+    });
+    label.appendChild(labelSpan);
+    label.appendChild(input);
+    return { label, input };
+  };
+
+  const surface = makeField("词面", word?.surface || "");
+  const dictionaryForm = makeField("原形", word?.dictionary_form || word?.surface || "");
+  const reading = makeField("读音", word?.reading || "");
+  const jlpt = makeField("JLPT", word?.jlpt_level || "");
+  const meanings = makeField("释义", Array.isArray(word?.meanings) ? word.meanings.join("；") : "", true);
+  const status = document.createElement("div");
+  Object.assign(status.style, {
+    minHeight: "18px",
+    color: "#b42318",
+    fontSize: "12px",
+    fontWeight: "700",
+    margin: "2px 0 10px"
+  });
+  const actions = document.createElement("div");
+  Object.assign(actions.style, {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "8px"
+  });
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "取消";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.textContent = "保存";
+  [cancelBtn, saveBtn].forEach((btn) => {
+    Object.assign(btn.style, {
+      border: "0",
+      borderRadius: "8px",
+      padding: "8px 12px",
+      fontSize: "13px",
+      fontWeight: "800",
+      cursor: "pointer"
+    });
+  });
+  Object.assign(cancelBtn.style, { background: "#eef2f6", color: "#344054" });
+  Object.assign(saveBtn.style, { background: "#2e8f76", color: "#fff" });
+
+  cancelBtn.addEventListener("click", () => backdrop.remove());
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) backdrop.remove();
+  });
+  saveBtn.addEventListener("click", async () => {
+    const nextSurface = surface.input.value.trim();
+    if (!nextSurface) {
+      status.textContent = "词面不能为空";
+      return;
+    }
+    saveBtn.disabled = true;
+    status.textContent = "";
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "POC_UPDATE_VOCAB_ITEM",
+        vocab_item_id: word?.vocab_item_id,
+        surface: nextSurface,
+        dictionary_form: dictionaryForm.input.value.trim() || nextSurface,
+        reading: reading.input.value.trim(),
+        jlpt_level: jlpt.input.value.trim(),
+        meanings: parseMeaningsInput(meanings.input.value),
+        example_ja: word?.example_ja || "",
+        example_zh: word?.example_zh || ""
+      });
+      if (!res?.ok) throw new Error(res?.error || "保存失败");
+      onSaved?.(res.item);
+      backdrop.remove();
+    } catch (error) {
+      status.textContent = String(error?.message || error);
+      saveBtn.disabled = false;
+    }
+  });
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+  modal.appendChild(title);
+  [surface, dictionaryForm, reading, jlpt, meanings].forEach((field) => modal.appendChild(field.label));
+  modal.appendChild(status);
+  modal.appendChild(actions);
+  backdrop.appendChild(modal);
+  getOverlayHost().appendChild(backdrop);
+  surface.input.focus();
+}
+
 function getOverlayHost() {
   const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
   if (fullscreen) {
@@ -236,6 +392,7 @@ function showAutoWordFeed(words) {
     return;
   }
   incoming.slice(0, 8).forEach((word) => {
+    let wordState = { ...(word || {}) };
     const surfaceText = word?.surface || "";
     const wordKey = `${word?.dictionary_form || surfaceText}:${word?.jlpt_level || ""}`;
     const lastShownAt = autoWordFeedRecent.get(wordKey) || 0;
@@ -262,7 +419,6 @@ function showAutoWordFeed(words) {
       fontSize: "13px"
     });
     const surface = document.createElement("span");
-    surface.textContent = surfaceText;
     Object.assign(surface.style, {
       overflow: "hidden",
       textOverflow: "ellipsis",
@@ -276,7 +432,6 @@ function showAutoWordFeed(words) {
       gap: "5px"
     });
     const level = document.createElement("span");
-    level.textContent = word?.jlpt_level || "";
     Object.assign(level.style, {
       padding: "2px 6px",
       borderRadius: "999px",
@@ -284,6 +439,23 @@ function showAutoWordFeed(words) {
       background: "rgba(46,143,118,0.42)",
       fontSize: "11px",
       fontWeight: "900"
+    });
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.title = "修改词条";
+    editBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.25V20h2.75L17.8 8.95l-2.75-2.75L4 17.25Zm15.9-10.4a1 1 0 0 0 0-1.42l-1.33-1.33a1 1 0 0 0-1.42 0l-1.04 1.04 2.75 2.75 1.04-1.04Z"/></svg>';
+    Object.assign(editBtn.style, {
+      width: "20px",
+      height: "20px",
+      display: word?.vocab_item_id ? "inline-grid" : "none",
+      placeItems: "center",
+      border: "0",
+      borderRadius: "999px",
+      color: "#dbeafe",
+      background: "rgba(37,99,235,0.38)",
+      padding: "0",
+      cursor: "pointer",
+      pointerEvents: "auto"
     });
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
@@ -303,13 +475,39 @@ function showAutoWordFeed(words) {
       pointerEvents: "auto"
     });
     const svg = deleteBtn.querySelector("svg");
-    if (svg) {
-      Object.assign(svg.style, {
+    const editSvg = editBtn.querySelector("svg");
+    [svg, editSvg].filter(Boolean).forEach((icon) => {
+      Object.assign(icon.style, {
         width: "13px",
         height: "13px",
         fill: "currentColor"
       });
-    }
+    });
+    const meaning = document.createElement("span");
+    const renderWord = () => {
+      const currentSurface = wordState?.surface || "";
+      surface.textContent = currentSurface;
+      level.textContent = wordState?.jlpt_level || "";
+      level.style.display = level.textContent ? "inline-block" : "none";
+      item.title = [
+        currentSurface,
+        wordState?.dictionary_form ? `原型: ${wordState.dictionary_form}` : "",
+        wordState?.reading ? `读音: ${wordState.reading}` : "",
+        wordState?.jlpt_level || ""
+      ].filter(Boolean).join(" · ");
+      const formText = wordState?.dictionary_form && wordState.dictionary_form !== currentSurface ? `原型: ${wordState.dictionary_form}` : "";
+      const readingText = wordState?.reading ? `读音: ${wordState.reading}` : "";
+      const meaningText = Array.isArray(wordState?.meanings) && wordState.meanings.length ? wordState.meanings[0] : wordState?.dictionary_form || "";
+      meaning.textContent = [formText, readingText, meaningText].filter(Boolean).join(" · ");
+    };
+    editBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showAutoWordEditPopup(wordState, (updated) => {
+        wordState = { ...wordState, ...(updated || {}), vocab_item_id: wordState.vocab_item_id };
+        renderWord();
+      });
+    });
     deleteBtn.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -329,14 +527,10 @@ function showAutoWordFeed(words) {
       }
     });
     item.appendChild(surface);
-    if (level.textContent) rightTools.appendChild(level);
+    rightTools.appendChild(level);
+    rightTools.appendChild(editBtn);
     rightTools.appendChild(deleteBtn);
     item.appendChild(rightTools);
-    const meaning = document.createElement("span");
-    const formText = word?.dictionary_form && word.dictionary_form !== surfaceText ? `原型: ${word.dictionary_form}` : "";
-    const readingText = word?.reading ? `读音: ${word.reading}` : "";
-    const meaningText = Array.isArray(word?.meanings) && word.meanings.length ? word.meanings[0] : word?.dictionary_form || "";
-    meaning.textContent = [formText, readingText, meaningText].filter(Boolean).join(" · ");
     Object.assign(meaning.style, {
       gridColumn: "1 / 3",
       overflow: "hidden",
@@ -346,6 +540,7 @@ function showAutoWordFeed(words) {
       fontSize: "11px",
       lineHeight: "14px"
     });
+    renderWord();
     item.appendChild(meaning);
     list.prepend(item);
   });

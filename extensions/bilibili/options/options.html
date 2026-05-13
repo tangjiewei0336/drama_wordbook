@@ -126,7 +126,7 @@
       <div class="row">
         <label for="subtitleBandTopRatio">字幕带上边界比例（0-1）</label>
         <input id="subtitleBandTopRatio" type="number" min="0" max="1" step="0.01" />
-        <div class="hint">默认 0.65，表示仅识别视频画面的下方 35% 区域。</div>
+        <div class="hint">默认 0.8，表示仅识别视频画面的下方 20% 区域。</div>
       </div>
       <div class="row">
         <label for="subtitleBandBottomRatio">字幕带下边界比例（0-1）</label>
@@ -139,9 +139,9 @@
         </label>
       </div>
       <div class="row">
-        <label for="subtitleSplitRatio">上下分割比例（中文占比，0.2-0.8）</label>
-        <input id="subtitleSplitRatio" type="number" min="0.2" max="0.8" step="0.01" />
-        <div class="hint">默认 0.5：字幕带上半用于中文，下半用于日语。</div>
+        <label for="subtitleSplitRatio">上下分割比例（中文占比，0.2-0.9）</label>
+        <input id="subtitleSplitRatio" type="number" min="0.2" max="0.9" step="0.01" />
+        <div class="hint">默认 0.7：字幕带上方 70% 用于中文，下方用于日语。</div>
       </div>
       <div class="row">
         <label>

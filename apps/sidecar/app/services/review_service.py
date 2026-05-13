@@ -333,6 +333,19 @@ def _repair_sentence_question(q: dict) -> dict:
     return mod
 
 
+def _sentence_order_matches(order_ids: list, question: dict) -> bool:
+    corr = question.get("correct_order_ids") or []
+    if not isinstance(order_ids, list) or len(order_ids) != len(corr):
+        return False
+    if tuple(order_ids) == tuple(corr):
+        return True
+    pieces = question.get("pieces") or []
+    by_id = {str(p.get("id")): str(p.get("surface") or "") for p in pieces if isinstance(p, dict)}
+    submitted = [by_id.get(str(pid), "") for pid in order_ids]
+    expected = [by_id.get(str(pid), "") for pid in corr]
+    return submitted == expected and all(submitted)
+
+
 def _record_daily_correct(conn: sqlite3.Connection, head_id: int, calendar_day: str) -> dict:
     mastered, days = _ensure_review_state_row(conn, head_id)
     if mastered:
@@ -615,8 +628,7 @@ def evaluate_answer(conn: sqlite3.Connection, *, session_id: str, calendar_day: 
         item = _repair_sentence_question(item)
         queue[cursor] = item
         order = payload.get("order_piece_ids") or []
-        corr = item.get("correct_order_ids") or []
-        ok = isinstance(order, list) and tuple(order) == tuple(corr)
+        ok = _sentence_order_matches(order, item)
         if ok:
             mastery_info = _record_daily_correct(conn, hid, calendar_day)
             cursor += 1
@@ -674,4 +686,3 @@ def review_snapshot() -> dict:
         return {"eligible_heads": heads, "mastered_heads": mast}
     finally:
         conn.close()
-

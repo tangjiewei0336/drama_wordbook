@@ -42,10 +42,10 @@ const DEFAULT_HOTKEY = isMacPlatform()
 
 export const DEFAULT_SETTINGS = {
   subtitleBandOnly: true,
-  subtitleBandTopRatio: 0.65,
+  subtitleBandTopRatio: 0.8,
   subtitleBandBottomRatio: 1.0,
   fixedSubtitleLayout: true,
-  subtitleSplitRatio: 0.5,
+  subtitleSplitRatio: 0.7,
   autoPauseOnCapture: true,
   maxRecentWords: 50,
   sidecarBaseUrl: DEFAULT_SIDECAR_BASE_URL,
@@ -76,7 +76,7 @@ function normalizeSettings(raw = {}) {
     subtitleSplitRatio: clamp(
       Number.isFinite(split) ? split : DEFAULT_SETTINGS.subtitleSplitRatio,
       0.2,
-      0.8
+      0.9
     ),
     autoPauseOnCapture: Boolean(merged.autoPauseOnCapture),
     maxRecentWords: clamp(Number(merged.maxRecentWords) || DEFAULT_SETTINGS.maxRecentWords, 10, 200),
@@ -138,6 +138,23 @@ export async function removeRecentWordByVocabItemId(vocabItemId) {
   const current = await getRecentWords();
   const target = Number(vocabItemId || 0);
   const next = current.filter((word) => Number(word.vocab_item_id || 0) !== target);
+  await chrome.storage.local.set({ [RECENT_WORDS_KEY]: next });
+  return next;
+}
+
+export async function updateRecentWordByVocabItemId(vocabItemId, patch = {}) {
+  const current = await getRecentWords();
+  const target = Number(vocabItemId || 0);
+  const next = current.map((word) =>
+    Number(word.vocab_item_id || 0) === target
+      ? {
+          ...word,
+          ...patch,
+          vocab_item_id: word.vocab_item_id,
+          id: word.id
+        }
+      : word
+  );
   await chrome.storage.local.set({ [RECENT_WORDS_KEY]: next });
   return next;
 }

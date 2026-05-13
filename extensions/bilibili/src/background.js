@@ -1,4 +1,4 @@
-import { addRecentWords, getRecentWords, getSettings, removeRecentWordByVocabItemId } from "./storage.js";
+import { addRecentWords, getRecentWords, getSettings, removeRecentWordByVocabItemId, updateRecentWordByVocabItemId } from "./storage.js";
 
 function shortenForUi(text, maxLen = 220) {
   const s = String(text ?? "").trim();
@@ -8,6 +8,19 @@ function shortenForUi(text, maxLen = 220) {
 
 function formatPipelineFailure(error) {
   return shortenForUi(String(error?.message || error || "未知错误"));
+}
+
+function normalizeOcrJapaneseText(text) {
+  const source = String(text || "");
+  const nextSmallTsuKana = "[かきくけこさしすせそたちてとぱぴぷぺぽカキクケコサシスセソタチテトパピプペポ]";
+  const prevJa = "[ぁ-んァ-ン一-龯]";
+  return source
+    .replace(new RegExp(`(${prevJa})つ(?=${nextSmallTsuKana})`, "g"), (match, prev, offset, full) => {
+      const next = full.charAt(offset + match.length);
+      if (prev === "い" && next === "か") return match;
+      return `${prev}っ`;
+    })
+    .replace(new RegExp(`(${prevJa})ツ(?=${nextSmallTsuKana})`, "g"), "$1ッ");
 }
 
 async function fetchSidecar(path, init) {
@@ -282,10 +295,11 @@ async function postOcr(imageBase64, cropRect, viewport, lang = "") {
 }
 
 async function postTokenize(text) {
+  const normalizedText = normalizeOcrJapaneseText(text);
   const res = await fetchSidecar(`/ja/tokenize`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text })
+    body: JSON.stringify({ text: normalizedText })
   });
   if (!res.ok) {
     const textResp = await res.text();
@@ -388,8 +402,22 @@ async function deleteVocabItem(itemId) {
   return res.json();
 }
 
+async function updateVocabItem(itemId, patch) {
+  const res = await fetchSidecar(`/vocab/items/${Number(itemId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch || {})
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`vocab update failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
 async function saveTokensAsVocab({ text, zhText = "", screenshotBase64 = null, playback = null, allowedJlptLevels = null, source = "auto" }) {
-  const tokenRes = text ? await postTokenize(text) : { tokens: [] };
+  const normalizedText = normalizeOcrJapaneseText(text);
+  const tokenRes = normalizedText ? await postTokenize(normalizedText) : { tokens: [] };
   const allowed = allowedJlptLevels ? new Set(allowedJlptLevels) : null;
   const seenWords = new Set();
   const words = (tokenRes.tokens || [])
@@ -409,7 +437,7 @@ async function saveTokensAsVocab({ text, zhText = "", screenshotBase64 = null, p
       jlpt_level: token.jlpt_level || "",
       source,
       meanings: Array.isArray(token.meanings) && token.meanings.length ? token.meanings : [token.dictionary_form || token.surface],
-      example_ja: text,
+      example_ja: normalizedText,
       example_zh: zhText,
       screenshot_base64: screenshotBase64,
       playback
@@ -785,10 +813,8 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
   }
   let ocrRes;
   if (settings.fixedSubtitleLayout) {
-    const split = Number(settings.subtitleSplitRatio || 0.5);
-    // Convention: 上 = 日文（kana + kanji），下 = 中文。subtitleSplitRatio 表示中文占比从顶部算起。
-    // Drama subtitles on Bilibili usually have Japanese above the Chinese translation, so the
-    // bottom band (split..1) is japanese and the top band (0..split) is chinese.
+    const split = Number(settings.subtitleSplitRatio || 0.7);
+    // Convention: 上 = 中文，下 = 日文。subtitleSplitRatio 表示中文区域从顶部算起的占比。
     const zhDataUrl = await cropDataUrlByVerticalRatio(ocrInputDataUrl, 0, split);
     const jaDataUrl = await cropDataUrlByVerticalRatio(ocrInputDataUrl, split, 1);
     const [zhOcr, jaOcr] = await Promise.all([
@@ -835,6 +861,7 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
       rawTextPreview: rawText.slice(0, 120)
     });
   }
+  ocrRes.ja_lines = (ocrRes.ja_lines || []).map((line) => normalizeOcrJapaneseText(line));
   const jaText = (ocrRes.ja_lines || []).join(" ").trim();
   const tokenizeText = jaText || rawText;
   console.log("[wordbook] tokenize input", {
@@ -1072,6 +1099,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       await deleteVocabItem(itemId);
       await removeRecentWordByVocabItemId(itemId);
       sendResponse({ ok: true, deleted_item_id: itemId });
+      return;
+    }
+
+    if (message.type === "POC_UPDATE_VOCAB_ITEM") {
+      const itemId = Number(message?.vocab_item_id || 0);
+      if (!itemId) {
+        sendResponse({ ok: false, error: "缺少词条 ID" });
+        return;
+      }
+      const patch = {
+        surface: String(message?.surface || "").trim(),
+        dictionary_form: String(message?.dictionary_form || "").trim(),
+        reading: String(message?.reading || "").trim(),
+        jlpt_level: String(message?.jlpt_level || "").trim(),
+        meanings: Array.isArray(message?.meanings) ? message.meanings : [],
+        example_ja: String(message?.example_ja || ""),
+        example_zh: String(message?.example_zh || "")
+      };
+      if (!patch.surface) {
+        sendResponse({ ok: false, error: "词面不能为空" });
+        return;
+      }
+      const updated = await updateVocabItem(itemId, patch);
+      await updateRecentWordByVocabItemId(itemId, updated);
+      sendResponse({ ok: true, item: updated });
       return;
     }
 

@@ -259,6 +259,24 @@ def _normalize_analysis_token(token: dict) -> dict:
     return token
 
 
+def normalize_ocr_small_tsu(text: str) -> str:
+    """Conservative OCR cleanup for large つ/ツ misread as small っ/ッ."""
+    source = str(text or "")
+    next_small_tsu = "かきくけこさしすせそたちてとぱぴぷぺぽカキクケコサシスセソタチテトパピプペポ"
+    prev_ja = r"[\u3040-\u30ff\u3400-\u9fff]"
+
+    def repl(match: re.Match) -> str:
+        prev = match.group(1)
+        large_tsu = match.group(2)
+        next_char = match.group(3)
+        if prev == "い" and next_char == "か":
+            return match.group(0)
+        small = "ッ" if large_tsu == "ツ" else "っ"
+        return f"{prev}{small}{next_char}"
+
+    return re.sub(f"({prev_ja})([つツ])([{re.escape(next_small_tsu)}])", repl, source)
+
+
 def _is_suru_stem(token: dict) -> bool:
     if token.get("pos") != "名词":
         return False
@@ -449,6 +467,7 @@ def merge_phrase_tokens(tokens: list[dict]) -> list[dict]:
 
 
 def tokenize_ja(text: str, include_stop: bool = False) -> list[dict]:
+    text = normalize_ocr_small_tsu(text)
     tokenizer = get_tokenizer()
     if tokenizer is None:
         # Fallback for POC when SudachiPy not installed.
