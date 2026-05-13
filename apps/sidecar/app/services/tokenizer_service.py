@@ -240,6 +240,10 @@ def _pos_label(pos: tuple) -> str:
     return POS_LABELS.get(str(pos[0]), str(pos[0]))
 
 
+def _public_token(token: dict) -> dict:
+    return {k: v for k, v in token.items() if not k.startswith("_")}
+
+
 def _normalize_analysis_token(token: dict) -> dict:
     if token.get("surface") == "つて":
         return {
@@ -317,6 +321,28 @@ def _is_verb_tail(token: dict) -> bool:
     if pos == "动词" and dictionary_form in {"いる", "おる", "くる", "いく", "しまう"}:
         return True
     return False
+
+
+def _is_content_token(token: dict) -> bool:
+    surface = str(token.get("surface", "") or "")
+    dictionary_form = str(token.get("dictionary_form", "") or "")
+    pos = str(token.get("pos", "") or "")
+    raw_pos = token.get("_raw_pos") or ()
+
+    if not surface:
+        return False
+    # Keep inflected verb chains such as しました. Their dictionary form may be
+    # する, which is otherwise filtered as a weak standalone helper verb.
+    if pos == "动词" and surface != dictionary_form:
+        return True
+    if dictionary_form in STOP_LEMMAS or surface in STOP_LEMMAS:
+        return False
+    if raw_pos:
+        if raw_pos[0] not in CONTENT_POS:
+            return False
+        if len(raw_pos) > 1 and raw_pos[1] in {"非自立可能", "代名詞"}:
+            return False
+    return True
 
 
 def _merge_verb_tail(tokens: list[dict], start: int) -> tuple[dict | None, int]:
@@ -443,24 +469,16 @@ def tokenize_ja(text: str, include_stop: bool = False) -> list[dict]:
         return merge_phrase_tokens(result) if include_stop else result
 
     tokens = tokenizer.tokenize(text)
-    result = []
+    raw_result = []
     for t in tokens:
         surface = t.surface()
         if not WORD_RE.match(surface):
             continue
         dictionary_form = t.dictionary_form()
-        if not include_stop and (dictionary_form in STOP_LEMMAS or surface in STOP_LEMMAS):
-            continue
         try:
             pos = t.part_of_speech()
         except Exception:
             pos = ()
-        if not include_stop and pos and pos[0] not in CONTENT_POS:
-            continue
-        if not include_stop and len(pos) > 1 and pos[1] == "非自立可能":
-            continue
-        if not include_stop and len(pos) > 1 and pos[1] == "代名詞":
-            continue
         reading = ""
         try:
             reading = t.reading_form()
@@ -470,15 +488,19 @@ def tokenize_ja(text: str, include_stop: bool = False) -> list[dict]:
             dictionary_form = _strip_trailing_na(dictionary_form)
             reading = _strip_trailing_reading_na(reading)
         jlpt_entry = lookup_jlpt_entry(dictionary_form, surface, reading)
-        result.append(
+        raw_result.append(
             _normalize_analysis_token({
                 "surface": surface,
                 "dictionary_form": dictionary_form,
                 "reading": reading,
                 "accent": lookup_pitch_accent(dictionary_form),
                 "pos": _pos_label(pos),
+                "_raw_pos": pos,
                 "jlpt_level": jlpt_entry.get("level", ""),
                 "meanings": _meanings_from_jlpt(jlpt_entry),
             })
         )
-    return merge_phrase_tokens(result) if include_stop else result
+    merged = merge_phrase_tokens(raw_result)
+    if not include_stop:
+        merged = [token for token in merged if _is_content_token(token)]
+    return [_public_token(token) for token in merged]
