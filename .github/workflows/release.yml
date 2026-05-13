@@ -112,7 +112,6 @@ jobs:
     needs:
       - package-extension
       - build-desktop
-    if: github.event_name != 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -126,13 +125,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          short_sha="${COMMIT_SHA::7}"
-          tag="main-${RUN_NUMBER}-${short_sha}"
-          title="Main build ${RUN_NUMBER} (${short_sha})"
-          notes="Automated release from main at ${COMMIT_SHA}."
+
+          target_sha="$COMMIT_SHA"
+          release_args=()
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            target_sha="${PR_HEAD_SHA:-$COMMIT_SHA}"
+            short_sha="${target_sha::7}"
+            tag="pr-${PR_NUMBER}-${RUN_NUMBER}-${short_sha}"
+            title="PR #${PR_NUMBER} build ${RUN_NUMBER} (${short_sha})"
+            notes="Automated prerelease from PR #${PR_NUMBER} at ${target_sha}."
+            release_args+=(--prerelease)
+          else
+            short_sha="${target_sha::7}"
+            tag="main-${RUN_NUMBER}-${short_sha}"
+            title="Main build ${RUN_NUMBER} (${short_sha})"
+            notes="Automated release from main at ${target_sha}."
+          fi
 
           rm -rf release-assets
           mkdir -p release-assets
@@ -155,4 +169,5 @@ jobs:
           gh release create "$tag" "${files[@]}" \
             --title "$title" \
             --notes "$notes" \
-            --target "$COMMIT_SHA"
+            --target "$target_sha" \
+            "${release_args[@]}"

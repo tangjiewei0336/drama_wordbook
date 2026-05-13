@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Brain,
   CalendarClock,
   ChevronDown,
