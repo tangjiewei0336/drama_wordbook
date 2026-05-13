@@ -6,23 +6,29 @@
 # The output executable is copied into the Electron app through
 # apps/desktop/package.json extraResources.
 
+import importlib.util
+
 from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
+    copy_metadata,
 )
 
 block_cipher = None
 
 
-def _safe_collect_submodules(name: str) -> list[str]:
+def _safe_collect_submodules(name: str, **kw) -> list[str]:
     try:
-        return collect_submodules(name)
+        return collect_submodules(name, **kw)
     except Exception:
         return []
 
 
 def _safe_collect_data_files(name: str, **kw) -> list:
+    spec = importlib.util.find_spec(name)
+    if spec is None or spec.submodule_search_locations is None:
+        return []
     try:
         return collect_data_files(name, **kw)
     except Exception:
@@ -36,6 +42,20 @@ def _safe_collect_dynamic_libs(name: str) -> list:
         return []
 
 
+def _safe_copy_metadata(name: str) -> list:
+    try:
+        return copy_metadata(name)
+    except Exception:
+        return []
+
+
+def _module_exists(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
 hiddenimports: list[str] = []
 hiddenimports += collect_submodules("app")
 hiddenimports += collect_submodules("uvicorn")
@@ -45,11 +65,23 @@ hiddenimports += collect_submodules("sudachipy")
 hiddenimports += collect_submodules("pyopenjtalk")
 # PaddleOCR 3.x routes through PaddleX pipelines (paddlex.inference.pipelines
 # .ocr) for predict(); these submodules are discovered dynamically by config.
-hiddenimports += _safe_collect_submodules("paddleocr")
-hiddenimports += _safe_collect_submodules("paddlex")
+hiddenimports += _safe_collect_submodules(
+    "paddleocr",
+    filter=lambda name: not name.startswith("paddleocr._doc2md"),
+)
+hiddenimports += _safe_collect_submodules(
+    "paddlex",
+    filter=lambda name: not (
+        name.startswith("paddlex.inference.serving")
+        or name.startswith("paddlex.inference.servers")
+    ),
+)
 # PaddlePaddle itself: native ops live under paddle._C and many lazy modules.
 # Without collect_submodules("paddle") the C++ extension loader breaks at import.
-hiddenimports += _safe_collect_submodules("paddle")
+hiddenimports += _safe_collect_submodules(
+    "paddle",
+    filter=lambda name: not name.startswith("paddle.tensorrt"),
+)
 # paddle.utils.cpp_extension reads Cython/Utility/*.cpp templates at import time
 # (or via inline op build). PyInstaller would otherwise ship Cython as bytecode
 # only and miss these non-Python resource files.
@@ -60,10 +92,13 @@ hiddenimports += _safe_collect_submodules("openpyxl")
 # wheel surfaces during build instead of at runtime.
 for _ocr_hid in (
     "cv2",
+    "bidi",
+    "imagesize",
     "yaml",
     "shapely",
     "shapely.geometry",
     "pyclipper",
+    "pypdfium2",
     "skimage",
     "skimage.morphology",
     "scipy",
@@ -77,7 +112,8 @@ for _ocr_hid in (
     "lxml.etree",
     "pkg_resources.py2_warn",
 ):
-    hiddenimports.append(_ocr_hid)
+    if _module_exists(_ocr_hid):
+        hiddenimports.append(_ocr_hid)
 
 datas: list = []
 datas += collect_data_files("sudachidict_core")
@@ -90,12 +126,31 @@ datas += _safe_collect_data_files("paddleocr", include_py_files=True)
 datas += _safe_collect_data_files("paddlex", include_py_files=True)
 # Paddle ships proto/.so descriptors + version.py needed at runtime.
 datas += _safe_collect_data_files("paddle", include_py_files=False)
+datas += _safe_collect_data_files("bidi")
+datas += _safe_collect_data_files("imagesize")
+datas += _safe_collect_data_files("pypdfium2")
 datas += _safe_collect_data_files("shapely")
 datas += _safe_collect_data_files("skimage")
 # Cython ships .cpp/.pyx templates under Cython/Utility/ and Cython/Includes/;
 # paddle (and some image libs) read them via importlib.resources at runtime,
 # so we must bundle them as data even though Cython itself is mostly .py.
 datas += _safe_collect_data_files("Cython", include_py_files=True)
+# PaddleX checks extras with importlib.metadata at runtime. In frozen builds,
+# these *.dist-info directories are not guaranteed to be present unless copied
+# explicitly; without them, paddlex.utils.deps reports that `OCR` dependencies
+# are missing even when the modules themselves were bundled.
+for _metadata_dist in (
+    "paddlex",
+    "paddleocr",
+    "paddlepaddle",
+    "imagesize",
+    "opencv-contrib-python",
+    "pyclipper",
+    "pypdfium2",
+    "python-bidi",
+    "shapely",
+):
+    datas += _safe_copy_metadata(_metadata_dist)
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]
 
 # Native libs: paddlepaddle ships libpaddle.* / libgomp / libdnnl, paddlex
