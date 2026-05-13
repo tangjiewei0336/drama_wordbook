@@ -10,6 +10,7 @@ from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
+    copy_metadata,
 )
 
 block_cipher = None
@@ -32,6 +33,13 @@ def _safe_collect_data_files(name: str, **kw) -> list:
 def _safe_collect_dynamic_libs(name: str) -> list:
     try:
         return collect_dynamic_libs(name)
+    except Exception:
+        return []
+
+
+def _safe_copy_metadata(name: str) -> list:
+    try:
+        return copy_metadata(name)
     except Exception:
         return []
 
@@ -60,10 +68,13 @@ hiddenimports += _safe_collect_submodules("openpyxl")
 # wheel surfaces during build instead of at runtime.
 for _ocr_hid in (
     "cv2",
+    "bidi",
+    "imagesize",
     "yaml",
     "shapely",
     "shapely.geometry",
     "pyclipper",
+    "pypdfium2",
     "skimage",
     "skimage.morphology",
     "scipy",
@@ -90,12 +101,31 @@ datas += _safe_collect_data_files("paddleocr", include_py_files=True)
 datas += _safe_collect_data_files("paddlex", include_py_files=True)
 # Paddle ships proto/.so descriptors + version.py needed at runtime.
 datas += _safe_collect_data_files("paddle", include_py_files=False)
+datas += _safe_collect_data_files("bidi")
+datas += _safe_collect_data_files("imagesize")
+datas += _safe_collect_data_files("pypdfium2")
 datas += _safe_collect_data_files("shapely")
 datas += _safe_collect_data_files("skimage")
 # Cython ships .cpp/.pyx templates under Cython/Utility/ and Cython/Includes/;
 # paddle (and some image libs) read them via importlib.resources at runtime,
 # so we must bundle them as data even though Cython itself is mostly .py.
 datas += _safe_collect_data_files("Cython", include_py_files=True)
+# PaddleX checks extras with importlib.metadata at runtime. In frozen builds,
+# these *.dist-info directories are not guaranteed to be present unless copied
+# explicitly; without them, paddlex.utils.deps reports that `OCR` dependencies
+# are missing even when the modules themselves were bundled.
+for _metadata_dist in (
+    "paddlex",
+    "paddleocr",
+    "paddlepaddle",
+    "imagesize",
+    "opencv-contrib-python",
+    "pyclipper",
+    "pypdfium2",
+    "python-bidi",
+    "shapely",
+):
+    datas += _safe_copy_metadata(_metadata_dist)
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]
 
 # Native libs: paddlepaddle ships libpaddle.* / libgomp / libdnnl, paddlex
