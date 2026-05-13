@@ -1,9 +1,9 @@
 {
-  "name": "drama-wordbook-desktop",
+  "name": "uni-desktop",
   "private": true,
   "version": "0.1.0",
-  "description": "Desktop shell for Drama Wordbook vocabulary review.",
-  "author": "Drama Wordbook",
+  "description": "Desktop shell for UNI vocabulary review.",
+  "author": "UNI",
   "type": "module",
   "main": "src-electron/main.cjs",
   "scripts": {
@@ -36,10 +36,12 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.drama-wordbook.desktop",
-    "productName": "Drama Wordbook",
+    "appId": "com.uni.desktop",
+    "productName": "UNI",
+    "icon": "resources/icon",
     "files": [
       "dist/**/*",
+      "resources/**/*",
       "src-electron/**/*",
       "package.json"
     ],

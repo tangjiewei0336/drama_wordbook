@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <title>Drama Wordbook</title>
+    <title>UNI</title>
     <style>
       * { box-sizing: border-box; }
       body {
@@ -25,8 +25,17 @@
         margin-bottom: 12px;
       }
       .title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         font-size: 16px;
         font-weight: 800;
+      }
+      .title img {
+        width: 24px;
+        height: 24px;
+        border-radius: 5px;
+        display: block;
       }
       .icon-actions {
         display: flex;
@@ -217,7 +226,7 @@
   </head>
   <body>
     <div class="topbar">
-      <div class="title">Drama Wordbook</div>
+      <div class="title"><img src="../icons/icon-32.png" alt="" />UNI</div>
       <div class="icon-actions">
         <button id="dashboardBtn" title="统计">统计</button>
         <button id="settingsBtn" title="设置">设置</button>

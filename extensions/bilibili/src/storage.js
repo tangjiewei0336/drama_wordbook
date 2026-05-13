@@ -12,7 +12,7 @@ function canonicalSidecarHost(u) {
   return u.host;
 }
 
-/** Origin only (scheme + host + port), defaults to Drama Wordbook local sidecar. */
+/** Origin only (scheme + host + port), defaults to UNI local sidecar. */
 export function normalizeSidecarBaseUrl(input) {
   const fallback = DEFAULT_SIDECAR_BASE_URL;
   const raw = String(input ?? "").trim();

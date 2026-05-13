@@ -152,7 +152,7 @@ function ensureStatusBadge() {
     transition: "opacity 0.2s ease",
     opacity: "0.78"
   });
-  badge.textContent = "Wordbook：空闲";
+  badge.textContent = "UNI：空闲";
   getOverlayHost().appendChild(badge);
   return badge;
 }
@@ -161,7 +161,7 @@ function setStatusBadge(status, message) {
   const badge = ensureStatusBadge();
   const statusText =
     status === "processing" ? "处理中" : status === "error" ? "错误" : "空闲";
-  badge.textContent = `Wordbook：${statusText}${message ? ` · ${message}` : ""}`;
+  badge.textContent = `UNI：${statusText}${message ? ` · ${message}` : ""}`;
   if (status === "error") {
     badge.style.background = "rgba(185,28,28,0.74)";
   } else if (status === "processing") {
