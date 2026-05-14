@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import ssl
 from functools import lru_cache
+from pathlib import Path
 
 import certifi
 
@@ -17,6 +18,17 @@ except Exception:  # pragma: no cover
 ACCENT_RE = re.compile(r"/A:([-0-9]+)\+([-0-9]+)\+([-0-9]+)")
 
 
+def _pyopenjtalk_has_dictionary() -> bool:
+    if pyopenjtalk is None:
+        return False
+    raw = getattr(pyopenjtalk, "OPEN_JTALK_DICT_DIR", b"")
+    if isinstance(raw, bytes):
+        path = raw.decode("utf-8", errors="ignore")
+    else:
+        path = str(raw or "")
+    return bool(path and (Path(path) / "sys.dic").exists())
+
+
 @lru_cache(maxsize=4096)
 def lookup_pitch_accent(text: str) -> int | None:
     """Best-effort pitch accent lookup.
@@ -25,7 +37,7 @@ def lookup_pitch_accent(text: str) -> int | None:
     optional because CI/dev environments may not have pyopenjtalk installed.
     """
     key = (text or "").strip()
-    if not key or pyopenjtalk is None:
+    if not key or not _pyopenjtalk_has_dictionary():
         return None
     try:
         frontend_items = pyopenjtalk.run_frontend(key)
