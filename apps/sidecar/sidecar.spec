@@ -7,6 +7,7 @@
 # apps/desktop/package.json extraResources.
 
 import importlib.util
+from pathlib import Path
 
 from PyInstaller.utils.hooks import (
     collect_data_files,
@@ -47,6 +48,50 @@ def _safe_copy_metadata(name: str) -> list:
         return copy_metadata(name)
     except Exception:
         return []
+
+
+def _collect_pyopenjtalk_data() -> list:
+    """Collect OpenJTalk dictionary/voice resources and fail builds if missing.
+
+    pyopenjtalk resolves its dictionary via importlib.resources at runtime. In a
+    frozen onedir app that path becomes `_internal/pyopenjtalk/...`; if the
+    dictionary directory is not bundled, every pitch-accent lookup emits
+    `Mecab_load() ... Cannot open ... open_jtalk_dic_utf_8-1.11`.
+    """
+    spec = importlib.util.find_spec("pyopenjtalk")
+    if spec is None or not spec.origin:
+        return []
+    try:
+        import pyopenjtalk
+
+        # Some build environments download/extract the dictionary lazily. Force
+        # that to happen during packaging so the artifact is self-contained.
+        lazy_init = getattr(pyopenjtalk, "_lazy_init", None)
+        if callable(lazy_init):
+            lazy_init()
+    except Exception as exc:
+        raise RuntimeError(f"pyopenjtalk is installed but its dictionary cannot be prepared: {exc}") from exc
+
+    package_dir = Path(spec.origin).resolve().parent
+    dic_dir = package_dir / "open_jtalk_dic_utf_8-1.11"
+    voice_dir = package_dir / "htsvoice"
+    if not (dic_dir / "sys.dic").exists():
+        raise RuntimeError(f"pyopenjtalk dictionary is missing: {dic_dir}")
+
+    items = _safe_collect_data_files("pyopenjtalk")
+    seen = set(items)
+    for root in (dic_dir, voice_dir):
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            dest = str(Path("pyopenjtalk") / path.parent.relative_to(package_dir))
+            item = (str(path), dest)
+            if item not in seen:
+                items.append(item)
+                seen.add(item)
+    return items
 
 
 def _module_exists(name: str) -> bool:
@@ -119,7 +164,7 @@ for _ocr_hid in (
 
 datas: list = []
 datas += collect_data_files("sudachidict_core")
-datas += collect_data_files("pyopenjtalk")
+datas += _collect_pyopenjtalk_data()
 # PaddleOCR + PaddleX 3.x package YAML/JSON pipeline configs and the
 # multilingual recognizer dictionaries; without these the pipeline init
 # raises "The pipeline (OCR) does not exist!".
