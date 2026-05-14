@@ -396,6 +396,8 @@ async function startSidecar() {
     env: {
       ...process.env,
       PYTHONUNBUFFERED: "1",
+      PYTHONUTF8: process.env.PYTHONUTF8 || "1",
+      PYTHONIOENCODING: process.env.PYTHONIOENCODING || "utf-8",
       ASR_PRELOAD: process.env.ASR_PRELOAD || "0",
       DRAMA_WORDBOOK_DATA_DIR: process.env.DRAMA_WORDBOOK_DATA_DIR || sidecarDataDir,
       DRAMA_WORDBOOK_OCR_PRELOAD: process.env.DRAMA_WORDBOOK_OCR_PRELOAD || "1",

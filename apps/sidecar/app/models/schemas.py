@@ -37,6 +37,32 @@ class OcrRecognizeResponse(BaseModel):
     raw_blocks: list[OcrBlock]
 
 
+class OcrCorrectionSettings(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    model: str = "glm-4.7"
+
+
+class OcrCorrectionSettingsUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    api_key: str | None = None
+    model: str | None = None
+
+
+class OcrCorrectionRequest(BaseModel):
+    ja_lines: list[str] = Field(default_factory=list)
+    zh_lines: list[str] = Field(default_factory=list)
+    raw_blocks: list[OcrBlock] = Field(default_factory=list)
+
+
+class OcrCorrectionResponse(BaseModel):
+    ja_lines: list[str]
+    zh_lines: list[str]
+    corrected: bool = False
+    skipped_reason: str = ""
+    model: str = "glm-4.7"
+
+
 class PlaybackContextRequest(BaseModel):
     platform: str = "bilibili"
     url: str
@@ -319,6 +345,8 @@ class ReviewAnswerRequest(BaseModel):
     choice_index: int | None = None
     text: str | None = None
     order_piece_ids: list[str] | None = None
+    skip: bool = False
+    abort: bool = False
 
 
 class ReviewAnswerResponse(BaseModel):
@@ -329,6 +357,10 @@ class ReviewAnswerResponse(BaseModel):
     reading_stage: str = ""
     head_state: dict = Field(default_factory=dict)
     advanced: bool | None = None
+    skipped: bool | None = None
+    skipped_question_id: str = ""
+    aborted: bool | None = None
+    remaining_before_abort: int | None = None
 
 
 class ReviewSnapshotResponse(BaseModel):

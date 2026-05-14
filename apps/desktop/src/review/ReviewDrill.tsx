@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  fetchReviewCurrent,
   fetchReviewSnapshot,
   localCalendarDay,
   postReviewAnswer,
@@ -42,6 +43,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState("");
+  const [sessionStats, setSessionStats] = useState({ correct: 0, wrong: 0, skipped: 0 });
 
   const [mcPick, setMcPick] = useState<number | null>(null);
   const [romaji, setRomaji] = useState<RomajiBufferState>({ kana: "", pending: "" });
@@ -103,6 +105,27 @@ export function ReviewDrill({ sidecarOnline }: Props) {
   }, []);
 
   useEffect(() => {
+    if (!sidecarOnline || sessionId || loading) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetchReviewCurrent(calendarDay);
+        if (cancelled || !r.session_id || r.empty_reason === "no_active_session") return;
+        setSessionId(r.session_id);
+        setQueueTotal(r.total);
+        setDone(r.completed);
+        applyQuestion(r.current);
+        setBanner(r.completed ? "本轮已完成或无更多题目。" : "已恢复未完成的复习进度。");
+      } catch {
+        // 没有旧会话或 sidecar 暂不可用时保持初始状态。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sidecarOnline, sessionId, loading, calendarDay, applyQuestion]);
+
+  useEffect(() => {
     if (current?.mode === "reading" && !wrongReveal) {
       const t = window.setTimeout(() => romajiFieldRef.current?.focus(), 80);
       return () => window.clearTimeout(t);
@@ -132,6 +155,10 @@ export function ReviewDrill({ sidecarOnline }: Props) {
     });
   }, []);
 
+  const bumpStats = useCallback((kind: "correct" | "wrong" | "skipped") => {
+    setSessionStats((stats) => ({ ...stats, [kind]: stats[kind] + 1 }));
+  }, []);
+
   const onStart = async () => {
     if (!sidecarOnline) return;
     setLoading(true);
@@ -141,6 +168,9 @@ export function ReviewDrill({ sidecarOnline }: Props) {
       setSessionId(r.session_id);
       setQueueTotal(r.total);
       setDone(r.completed);
+      if (!r.resumed) {
+        setSessionStats({ correct: 0, wrong: 0, skipped: 0 });
+      }
       if (r.empty_reason === "no_eligible_heads") {
         setBanner("当前没有需要复习的词头（可能均已记住或词库为空）。");
         applyQuestion(null);
@@ -151,10 +181,59 @@ export function ReviewDrill({ sidecarOnline }: Props) {
         applyQuestion(r.current);
         if (r.completed) {
           setBanner("今日队列已完成或无可出题项。");
+        } else if (r.resumed) {
+          setBanner("已恢复未完成的复习进度。");
         } else {
           setBanner("");
         }
       }
+      await loadSnap();
+    } catch (e) {
+      setBanner(String((e as Error).message || e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const skipCurrent = async () => {
+    if (!sessionId || !current) return;
+    setLoading(true);
+    try {
+      const r = await postReviewAnswer({
+        session_id: sessionId,
+        calendar_day: calendarDay,
+        skip: true,
+      });
+      setWrongReveal(null);
+      setDone(r.done);
+      applyQuestion(r.current);
+      setQueueTotal((n) => Math.max(0, n - 1));
+      bumpStats("skipped");
+      setBanner(r.done ? "已移除最后一题，本轮结束。" : "已移除该题。");
+      await loadSnap();
+    } catch (e) {
+      setBanner(String((e as Error).message || e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const abortCurrentSession = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    try {
+      const r = await postReviewAnswer({
+        session_id: sessionId,
+        calendar_day: calendarDay,
+        abort: true,
+      });
+      setWrongReveal(null);
+      setDone(true);
+      setSessionId("");
+      setQueueTotal(0);
+      setSessionStats({ correct: 0, wrong: 0, skipped: 0 });
+      applyQuestion(null);
+      setBanner(`已中止本轮答题${r.remaining_before_abort ? `，剩余 ${r.remaining_before_abort} 题未作答` : ""}。`);
       await loadSnap();
     } catch (e) {
       setBanner(String((e as Error).message || e));
@@ -175,6 +254,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
         choice_index: pickIdx,
       });
       if (!r.correct && current.mode === "mc") {
+        bumpStats("wrong");
         const ci = Number(current.correct_index);
         setWrongReveal({
           mode: "mc",
@@ -192,6 +272,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
       if (r.head_state?.mastered) {
         setBanner("恭喜，该词头已满足「三日记住」条件，将不再进入复习队列。");
       } else setBanner("");
+      bumpStats("correct");
       setDone(r.done);
       applyQuestion(r.current);
       await loadSnap();
@@ -221,6 +302,11 @@ export function ReviewDrill({ sidecarOnline }: Props) {
       });
       if (r.head_state?.mastered) {
         setBanner("恭喜，该词头已满足「三日记住」条件，将不再进入复习队列。");
+      }
+      if (r.correct) {
+        bumpStats("correct");
+      } else if (r.hint_reading_after_wrong || r.advanced) {
+        bumpStats("wrong");
       }
       setDone(r.done);
       applyQuestion(r.current);
@@ -257,6 +343,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
         order_piece_ids: sentenceOrder,
       });
       if (!r.correct && current.mode === "sentence") {
+        bumpStats("wrong");
         setWrongReveal({
           mode: "sentence",
           correct: correctJa,
@@ -271,6 +358,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
       }
       setDone(r.done);
       applyQuestion(r.current);
+      bumpStats("correct");
       if (r.head_state?.mastered) {
         setBanner("恭喜，该词头已满足「三日记住」条件，将不再进入复习队列。");
       } else setBanner("");
@@ -345,15 +433,46 @@ export function ReviewDrill({ sidecarOnline }: Props) {
             />
           </label>
           <button type="button" className="primary" onClick={onStart} disabled={loading || !sidecarOnline}>
-            {loading ? "处理中…" : sessionId ? "重新开始今日" : "开始一轮"}
+            {loading ? "处理中…" : sessionId ? "继续本轮" : "开始一轮"}
           </button>
+          {sessionId && !done ? (
+            <button type="button" className="ghost review-abort-button" onClick={abortCurrentSession} disabled={loading}>
+              中止答题
+            </button>
+          ) : null}
         </section>
 
         {banner ? <div className="review-banner">{banner}</div> : null}
 
         {done && !current ? (
-          <div className="review-empty">
-            <p>本轮已完成或无更多题目。</p>
+          <div className="review-complete">
+            <div className="review-confetti" aria-hidden>
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+            <h3>恭喜完成本轮</h3>
+            <p>这轮复习已经收尾，脑内缓存写入成功。</p>
+            <div className="review-complete-stats">
+              <div>
+                <strong>{sessionStats.correct}</strong>
+                <span>答对</span>
+              </div>
+              <div>
+                <strong>{sessionStats.wrong}</strong>
+                <span>错题</span>
+              </div>
+              <div>
+                <strong>{sessionStats.skipped}</strong>
+                <span>跳过</span>
+              </div>
+              <div>
+                <strong>{sessionStats.correct + sessionStats.wrong + sessionStats.skipped}</strong>
+                <span>已统计</span>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -362,6 +481,9 @@ export function ReviewDrill({ sidecarOnline }: Props) {
             <div className="review-card-head">
               <span className="review-badge">{modeLabel}</span>
               {queueTotal ? <small>题库本轮约 {queueTotal} 题（含错题重排）</small> : null}
+              <button type="button" className="ghost review-skip-button" onClick={skipCurrent} disabled={loading || Boolean(wrongReveal)}>
+                跳过该题
+              </button>
             </div>
 
             {current.mode === "mc" ? (
@@ -395,7 +517,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
                 </p>
                 <p className="muted review-romaji-hint">
                   使用<strong>罗马字</strong>输入假名（如 <code>ka</code>→か、<code>shi</code>→し、双写辅音促音如{" "}
-                  <code>tte</code>→って），<strong>Enter</strong> 提交；不依赖系统日文输入法。
+                  <code>tte</code>→って，<code>tsu</code>→つ，<code>ltsu</code>→っ），<strong>Enter</strong> 提交；不依赖系统日文输入法。
                 </p>
                 <div
                   ref={romajiFieldRef}

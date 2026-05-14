@@ -50,6 +50,11 @@ function rehomeOverlay() {
   }
 }
 
+function mountOverlay(root, mask, card) {
+  root.replaceChildren(mask, card);
+  getOverlayHost().appendChild(root);
+}
+
 document.addEventListener("fullscreenchange", rehomeOverlay);
 document.addEventListener("webkitfullscreenchange", rehomeOverlay);
 
@@ -142,7 +147,6 @@ async function renderOverlay(payload) {
   const root = document.getElementById(OVERLAY_ROOT_ID) || createEl("div", "wb-overlay-root");
   root.id = OVERLAY_ROOT_ID;
   root.className = "wb-overlay-root";
-  root.replaceChildren();
   const mask = createEl("div", "wb-overlay-mask");
   const card = createEl("div", "wb-overlay-card");
   const savedSize = await loadOverlaySize();
@@ -273,13 +277,44 @@ async function renderOverlay(payload) {
   const tokenSection = createEl("div", "wb-overlay-section");
   tokenSection.appendChild(createEl("div", "wb-overlay-label", "选择字符/词片段（可多选，自动拼接）"));
   const tokenList = createEl("div", "wb-overlay-token-list");
-  const tokens = Array.isArray(payload?.tokens) ? [...payload.tokens] : [];
+  let tokens = Array.isArray(payload?.tokens) ? [...payload.tokens] : [];
   const selectedIndices = new Set();
   if (tokens.length > 0) selectedIndices.add(0);
   let addBtnHandler = async () => {};
 
   if (tokens.length === 0) {
     tokenList.appendChild(createEl("div", "", "未识别到可用日语分词。"));
+    let initialRetokenizeTimer = 0;
+    jaTextarea.addEventListener("input", () => {
+      window.clearTimeout(initialRetokenizeTimer);
+      initialRetokenizeTimer = window.setTimeout(async () => {
+        const text = safeText(jaTextarea.value).trim();
+        if (!text) return;
+        tokenList.innerHTML = "";
+        tokenList.appendChild(createEl("div", "", "重新分词中..."));
+        try {
+          const res = await chrome.runtime.sendMessage({ type: "POC_TOKENIZE_TEXT", text });
+          const nextTokens = Array.isArray(res?.tokens) ? res.tokens : [];
+          if (!nextTokens.length) {
+            tokenList.innerHTML = "";
+            tokenList.appendChild(createEl("div", "", "未识别到可用日语分词。"));
+            return;
+          }
+          await renderOverlay({
+            ...payload,
+            ocr: {
+              ...(payload?.ocr || {}),
+              ja_lines: [text],
+              zh_lines: [safeText(zhTextarea.value)]
+            },
+            tokens: nextTokens
+          });
+        } catch {
+          tokenList.innerHTML = "";
+          tokenList.appendChild(createEl("div", "", "重新分词失败。"));
+        }
+      }, 420);
+    });
   } else {
     const dictPreview = createEl("div", "wb-overlay-dict-preview wb-overlay-dict-panel");
     dictPreview.innerHTML = '<span class="muted">词典查询结果将显示在这里</span>';
@@ -396,7 +431,7 @@ async function renderOverlay(payload) {
     const renderTokenBubbles = () => {
       tokenList.innerHTML = "";
       if (!tokens.length) {
-        tokenList.appendChild(createEl("div", "", "候选词已清空。"));
+        tokenList.appendChild(createEl("div", "", "未识别到可用日语分词。"));
         return;
       }
       tokens.forEach((token, index) => {
@@ -432,6 +467,41 @@ async function renderOverlay(payload) {
         tokenList.appendChild(bubble);
       });
     };
+
+    let retokenizeTimer = 0;
+    let retokenizeSeq = 0;
+    const retokenizeFromTextarea = () => {
+      window.clearTimeout(retokenizeTimer);
+      retokenizeTimer = window.setTimeout(async () => {
+        const text = safeText(jaTextarea.value).trim();
+        const seq = ++retokenizeSeq;
+        if (!text) {
+          tokens = [];
+          selectedIndices.clear();
+          renderTokenBubbles();
+          await refreshBubbleState();
+          return;
+        }
+        tokenList.classList.add("loading");
+        try {
+          const res = await chrome.runtime.sendMessage({ type: "POC_TOKENIZE_TEXT", text });
+          if (seq !== retokenizeSeq) return;
+          tokens = Array.isArray(res?.tokens) ? res.tokens : [];
+          selectedIndices.clear();
+          if (tokens.length) selectedIndices.add(0);
+          renderTokenBubbles();
+          await refreshBubbleState();
+        } catch {
+          if (seq === retokenizeSeq) {
+            tokenList.innerHTML = "";
+            tokenList.appendChild(createEl("div", "", "重新分词失败。"));
+          }
+        } finally {
+          tokenList.classList.remove("loading");
+        }
+      }, 420);
+    };
+    jaTextarea.addEventListener("input", retokenizeFromTextarea);
 
     renderTokenBubbles();
     refreshBubbleState().catch(() => {});
@@ -566,7 +636,9 @@ async function renderOverlay(payload) {
   if (payload?.loading) {
     const loadingWrap = createEl("div", "wb-overlay-loading");
     const spinner = createEl("div", "wb-spinner");
-    const text = createEl("div", "muted", "正在识别字幕并查询词典，请稍候...");
+    const stepText = safeText(payload?.loading_step) || "正在识别字幕";
+    const text = createEl("div", "wb-overlay-loading-step", stepText);
+    const detail = createEl("div", "muted", safeText(payload?.loading_detail) || "请稍候...");
     const cancelBtn = createEl("button", "wb-btn wb-btn-default", "关闭窗口");
     cancelBtn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "POC_RELEASE_CAPTURE_LOCK" }).catch(() => {});
@@ -574,6 +646,7 @@ async function renderOverlay(payload) {
     });
     loadingWrap.appendChild(spinner);
     loadingWrap.appendChild(text);
+    loadingWrap.appendChild(detail);
 
     const cardHeaderLoading = createEl("div", "wb-overlay-card-header");
     cardHeaderLoading.appendChild(title);
@@ -593,9 +666,7 @@ async function renderOverlay(payload) {
     card.appendChild(cardScrollLoading);
     card.appendChild(cardFooterLoading);
 
-    root.appendChild(mask);
-    root.appendChild(card);
-    getOverlayHost().appendChild(root);
+    mountOverlay(root, mask, card);
     return;
   }
 
@@ -622,9 +693,7 @@ async function renderOverlay(payload) {
   card.appendChild(cardScroll);
   card.appendChild(cardFooter);
 
-  root.appendChild(mask);
-  root.appendChild(card);
-  getOverlayHost().appendChild(root);
+  mountOverlay(root, mask, card);
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

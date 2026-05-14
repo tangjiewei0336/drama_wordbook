@@ -24,6 +24,10 @@ from app.models.schemas import (
     JaTokenizeRequest,
     JaTokenizeResponse,
     OcrBlock,
+    OcrCorrectionRequest,
+    OcrCorrectionResponse,
+    OcrCorrectionSettings,
+    OcrCorrectionSettingsUpdateRequest,
     OcrRecognizeRequest,
     OcrRecognizeResponse,
     PartnerRequestPayload,
@@ -77,9 +81,12 @@ from app.services.ocr_service import (
     run_ocr,
     start_ocr_model_load,
 )
+from app.services.ocr_correction_service import correct_ocr_lines_with_glm
 from app.services.tokenizer_service import tokenize_ja
 from app.services.review_service import evaluate_answer as review_evaluate_answer
 from app.services.review_service import review_snapshot as review_snapshot_service
+from app.services.review_service import current_session as review_current_session
+from app.services.review_service import abort_session as review_abort_session
 from app.services.review_service import start_or_resume_session as review_start_session
 from app.services.vocab_service import (
     _get_conn,
@@ -95,6 +102,7 @@ from app.services.vocab_service import (
     get_by_player,
     get_by_time,
     get_asr_settings,
+    get_ocr_correction_settings,
     get_profile,
     get_desktop_settings,
     get_partner_state,
@@ -122,6 +130,7 @@ from app.services.vocab_service import (
     save_profile,
     save_desktop_settings,
     save_asr_settings,
+    save_ocr_correction_settings,
     save_sync_config,
     schedule_sync,
     collect_shared_sentence,
@@ -200,6 +209,49 @@ def ocr_model_load():
 @app.post("/ocr/model/repair")
 def ocr_model_repair():
     return start_ocr_model_load(force_repair=True)
+
+
+@app.get("/ocr/correction/settings", response_model=OcrCorrectionSettings)
+def ocr_correction_settings_get():
+    return OcrCorrectionSettings(**get_ocr_correction_settings())
+
+
+@app.patch("/ocr/correction/settings", response_model=OcrCorrectionSettings)
+def ocr_correction_settings_patch(payload: OcrCorrectionSettingsUpdateRequest):
+    return OcrCorrectionSettings(
+        **save_ocr_correction_settings(
+            {
+                "enabled": payload.enabled,
+                "api_key": payload.api_key,
+                "model": payload.model,
+            }
+        )
+    )
+
+
+@app.post("/ocr/correct", response_model=OcrCorrectionResponse)
+def ocr_correct(payload: OcrCorrectionRequest):
+    settings = get_ocr_correction_settings()
+    model = settings.get("model") or "glm-4.7"
+    if not settings.get("enabled"):
+        return OcrCorrectionResponse(
+            ja_lines=payload.ja_lines,
+            zh_lines=payload.zh_lines,
+            corrected=False,
+            skipped_reason="disabled",
+            model=model,
+        )
+    try:
+        result = correct_ocr_lines_with_glm(
+            ja_lines=payload.ja_lines,
+            zh_lines=payload.zh_lines,
+            raw_blocks=[x.model_dump() for x in payload.raw_blocks],
+            api_key=settings.get("api_key", ""),
+            model=model,
+        )
+        return OcrCorrectionResponse(**result)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/ja/tokenize", response_model=JaTokenizeResponse)
@@ -615,6 +667,15 @@ def review_start_endpoint(payload: ReviewStartRequest):
         conn.close()
 
 
+@app.get("/review/current", response_model=ReviewStartResponse)
+def review_current_endpoint(calendar_day: str):
+    conn = _get_conn()
+    try:
+        return ReviewStartResponse(**review_current_session(conn, calendar_day))
+    finally:
+        conn.close()
+
+
 @app.post("/review/answer", response_model=ReviewAnswerResponse)
 def review_answer_endpoint(payload: ReviewAnswerRequest):
     conn = _get_conn()
@@ -627,12 +688,17 @@ def review_answer_endpoint(payload: ReviewAnswerRequest):
             payload_dict["text"] = ans["text"]
         if ans.get("order_piece_ids") is not None:
             payload_dict["order_piece_ids"] = ans["order_piece_ids"]
-        raw = review_evaluate_answer(
-            conn,
-            session_id=str(ans["session_id"]),
-            calendar_day=str(ans["calendar_day"]),
-            payload=payload_dict,
-        )
+        if ans.get("skip"):
+            payload_dict["skip"] = True
+        if ans.get("abort"):
+            raw = review_abort_session(conn, session_id=str(ans["session_id"]), calendar_day=str(ans["calendar_day"]))
+        else:
+            raw = review_evaluate_answer(
+                conn,
+                session_id=str(ans["session_id"]),
+                calendar_day=str(ans["calendar_day"]),
+                payload=payload_dict,
+            )
         return ReviewAnswerResponse(**raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

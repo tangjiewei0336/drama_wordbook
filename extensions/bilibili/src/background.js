@@ -298,6 +298,24 @@ async function postOcr(imageBase64, cropRect, viewport, lang = "") {
   return res.json();
 }
 
+async function postOcrCorrection(ocrRes) {
+  const payload = {
+    ja_lines: Array.isArray(ocrRes?.ja_lines) ? ocrRes.ja_lines : [],
+    zh_lines: Array.isArray(ocrRes?.zh_lines) ? ocrRes.zh_lines : [],
+    raw_blocks: Array.isArray(ocrRes?.raw_blocks) ? ocrRes.raw_blocks : []
+  };
+  const res = await fetchSidecar(`/ocr/correct`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`ocr/correct failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
 async function postTokenize(text) {
   const normalizedText = normalizeOcrJapaneseText(text);
   const res = await fetchSidecar(`/ja/tokenize`, {
@@ -779,36 +797,34 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
   }
 
   const playbackRes = await syncPlaybackContextFromTab(tab.id);
-  if (!options.autoSave) {
+  const showLoadingStep = async (step, detail = "") => {
+    if (options.autoSave) return;
     await showOverlay(tab.id, {
       loading: true,
+      loading_step: step,
+      loading_detail: detail,
       require_save: true,
       playback: playbackRes.playback
     });
-  }
+  };
   let playerFrameDataUrl = await captureVideoFrameDataUrl(tab.id);
   let captureSource = "video_element";
   if (!playerFrameDataUrl) {
     captureSource = "tab_capture_fallback";
-    // Prevent loading overlay from being captured in fallback mode.
-    await hideOverlay(tab.id);
     const screenshotDataUrl = await captureFrameDataUrl();
     playerFrameDataUrl = await cropScreenshotToVideoArea(
       screenshotDataUrl,
       playbackRes.playback.video_rect,
       playbackRes.playback.viewport
     );
-    if (!options.autoSave) {
-      await showOverlay(tab.id, {
-        loading: true,
-        require_save: true,
-        playback: playbackRes.playback
-      });
-    }
+  }
+  if (!options.autoSave) {
+    await showLoadingStep("正在准备截图", "已截取当前视频画面，准备裁切字幕区域。");
   }
   const fullImageBase64 = dataUrlToBase64(playerFrameDataUrl);
   let ocrInputDataUrl = playerFrameDataUrl;
   if (settings.subtitleBandOnly) {
+    await showLoadingStep("正在裁切字幕区域", "根据字幕识别范围截取画面。");
     ocrInputDataUrl = await cropDataUrlByVerticalRatio(
       ocrInputDataUrl,
       settings.subtitleBandTopRatio,
@@ -817,6 +833,7 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
   }
   let ocrRes;
   if (settings.fixedSubtitleLayout) {
+    await showLoadingStep("正在识别双语字幕", "按固定字幕布局分别识别中文和日文。");
     const split = Number(settings.subtitleSplitRatio || 0.7);
     // Convention: 上 = 中文，下 = 日文。subtitleSplitRatio 表示中文区域从顶部算起的占比。
     const zhDataUrl = await cropDataUrlByVerticalRatio(ocrInputDataUrl, 0, split);
@@ -838,6 +855,7 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
       jaCount: jaTexts.length
     });
   } else {
+    await showLoadingStep("正在 OCR 识别", "正在从画面中读取字幕文本。");
     const imageBase64 = dataUrlToBase64(ocrInputDataUrl);
     ocrRes = await postOcr(
       imageBase64,
@@ -867,8 +885,28 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
   }
   ocrRes.ja_lines = (ocrRes.ja_lines || []).map((line) => normalizeOcrJapaneseText(line));
   ocrRes.zh_lines = (ocrRes.zh_lines || []).map((line) => stripAsciiAngleBrackets(line).trim()).filter(Boolean);
+  if (!options.autoSave) {
+    try {
+      await showLoadingStep("正在大模型修正", "检查促音、中日语错位和背景乱码。");
+      const corrected = await postOcrCorrection(ocrRes);
+      if (corrected?.corrected) {
+        ocrRes.ja_lines = (corrected.ja_lines || []).map((line) => normalizeOcrJapaneseText(line)).filter(Boolean);
+        ocrRes.zh_lines = (corrected.zh_lines || []).map((line) => stripAsciiAngleBrackets(line).trim()).filter(Boolean);
+        ocrRes.llm_corrected = true;
+        ocrRes.llm_model = corrected.model || "glm-4.7";
+        console.log("[wordbook] OCR corrected by LLM", {
+          model: ocrRes.llm_model,
+          jaCount: ocrRes.ja_lines.length,
+          zhCount: ocrRes.zh_lines.length
+        });
+      }
+    } catch (error) {
+      console.warn("[wordbook] OCR LLM correction skipped", error);
+    }
+  }
   const jaText = (ocrRes.ja_lines || []).join(" ").trim();
   const tokenizeText = jaText || rawText;
+  await showLoadingStep("正在分词和查词", "根据修正后的日语生成可选择词块。");
   console.log("[wordbook] tokenize input", {
     source: jaText ? "ja_lines" : "raw_blocks",
     preview: tokenizeText.slice(0, 120)
@@ -1002,6 +1040,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         "POC_RESUME_PLAYBACK",
         "POC_RELEASE_CAPTURE_LOCK",
         "POC_DICT_LOOKUP",
+        "POC_TOKENIZE_TEXT",
         "POC_ASR_START",
         "POC_ASR_STOP",
         "POC_ASR_AUDIO_CHUNK",
@@ -1156,6 +1195,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "POC_DICT_LOOKUP") {
       const result = await postDictLookup(String(message?.lemma || ""));
       sendResponse({ ok: true, result });
+      return;
+    }
+
+    if (message.type === "POC_TOKENIZE_TEXT") {
+      const result = await postTokenize(String(message?.text || ""));
+      sendResponse({ ok: true, tokens: result.tokens || [] });
       return;
     }
 
