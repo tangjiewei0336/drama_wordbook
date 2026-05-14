@@ -97,6 +97,12 @@ DEFAULT_DESKTOP_SETTINGS = {
 DEFAULT_ASR_SETTINGS = {
     "hf_mirror_enabled": True,
 }
+DEFAULT_OCR_CORRECTION_SETTINGS = {
+    "enabled": False,
+    "api_key": "",
+    "model": "glm-4.7",
+}
+OCR_CORRECTION_MODELS = {"glm-4.7", "glm-4.7-flashx"}
 
 
 def _utc_now() -> str:
@@ -1313,6 +1319,33 @@ def save_asr_settings(settings: dict) -> dict:
         "hf_mirror_enabled": current["hf_mirror_enabled"] if enabled is None else bool(enabled),
     }
     return _set_setting("asr_settings", next_settings)
+
+
+def get_ocr_correction_settings() -> dict:
+    raw = _get_setting("ocr_correction_settings", DEFAULT_OCR_CORRECTION_SETTINGS)
+    model = str(raw.get("model") or DEFAULT_OCR_CORRECTION_SETTINGS["model"]).strip().lower()
+    if model not in OCR_CORRECTION_MODELS:
+        model = DEFAULT_OCR_CORRECTION_SETTINGS["model"]
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "api_key": str(raw.get("api_key") or ""),
+        "model": model,
+    }
+
+
+def save_ocr_correction_settings(settings: dict) -> dict:
+    current = get_ocr_correction_settings()
+    enabled = settings.get("enabled")
+    api_key = settings.get("api_key")
+    model = str(settings.get("model") if settings.get("model") is not None else current.get("model") or "").strip().lower()
+    if model not in OCR_CORRECTION_MODELS:
+        model = DEFAULT_OCR_CORRECTION_SETTINGS["model"]
+    next_settings = {
+        "enabled": current["enabled"] if enabled is None else bool(enabled),
+        "api_key": current["api_key"] if api_key is None else str(api_key or "").strip(),
+        "model": model,
+    }
+    return _set_setting("ocr_correction_settings", next_settings)
 
 
 def _reset_sync_session(config: dict | None = None) -> dict:

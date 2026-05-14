@@ -394,6 +394,12 @@ video .wb-overlay-root,
   animation: wb-spin 0.9s linear infinite;
 }
 
+.wb-overlay-loading-step {
+  color: #203128;
+  font-size: 15px;
+  font-weight: 800;
+}
+
 @keyframes wb-spin {
   from {
     transform: rotate(0deg);

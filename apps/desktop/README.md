@@ -1,6 +1,6 @@
 # UNI Desktop
 
-Electron + React desktop shell for browsing vocabulary saved by the local sidecar.
+Electron + React desktop shell for browsing, reviewing, exporting, and syncing vocabulary saved by the local sidecar.
 
 ## Requirements
 
@@ -64,5 +64,9 @@ Generated desktop artifacts are written to `apps/desktop/release`.
 - Browse vocabulary by player source, by time, and by sentence.
 - View sentence screenshots, edit sentence text, analyze tokens, click words for dictionary lookup, share sentences, and delete a sentence with its bound words.
 - Use Space to see activity, partner activity, recent series, partner requests, and shared sentences.
+- Review with multiple-choice, reading input, and sentence-order questions; skip bad questions, abort a round, and see completion stats.
+- Export the wordbook to PDF or Excel, with date-range filters. PDF groups entries by drama/episode and includes readings, pitch accents, parts of speech, example sentences, and screenshots.
+- Open Settings as a sidebar-driven panel with pages for profile, export, OCR correction, sync, desktop reminders, and runtime.
+- Configure OCR GLM correction from Settings -> OCR 修正. Supported models are `GLM-4.7` and `GLM-4.7-FlashX`.
 - Log in to sync, edit profile after login, configure auto-sync interval, and resolve sync conflicts.
-- Inspect Sidecar health, ASR model status, and logs from the runtime page.
+- Inspect Sidecar health, OCR/ASR model status, repair buttons, hf-mirror download setting, and logs from Settings -> 运行中心.

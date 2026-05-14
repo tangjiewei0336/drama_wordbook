@@ -99,6 +99,12 @@ export type AsrSettings = {
   hf_mirror_enabled: boolean;
 };
 
+export type OcrCorrectionSettings = {
+  enabled: boolean;
+  api_key: string;
+  model: "glm-4.7" | "glm-4.7-flashx";
+};
+
 export type SidecarProcessStatus = {
   state: string;
   pid: number | null;
@@ -282,6 +288,20 @@ export async function updateAsrSettings(payload: Partial<AsrSettings>): Promise<
   });
   if (!res.ok) throw new Error(await parseApiError(res, `更新 ASR 设置失败（${res.status}）`));
   return (await res.json()) as AsrSettings;
+}
+
+export async function fetchOcrCorrectionSettings(): Promise<OcrCorrectionSettings> {
+  return getJson<OcrCorrectionSettings>("/ocr/correction/settings");
+}
+
+export async function updateOcrCorrectionSettings(payload: Partial<OcrCorrectionSettings>): Promise<OcrCorrectionSettings> {
+  const res = await fetch(`${SIDECAR_BASE}/ocr/correction/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `更新 OCR 修正设置失败（${res.status}）`));
+  return (await res.json()) as OcrCorrectionSettings;
 }
 
 export async function fetchByPlayer(): Promise<PlayerNode[]> {

@@ -27,6 +27,7 @@ import {
   Terminal,
   Trash2,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -48,6 +49,7 @@ import {
   fetchSyncConflicts,
   fetchHeadItems,
   fetchHealth,
+  fetchOcrCorrectionSettings,
   fetchProfile,
   fetchSentences,
   fetchSyncConfig,
@@ -74,10 +76,12 @@ import {
   updateSentence,
   updateAsrSettings,
   updateDesktopSettings,
+  updateOcrCorrectionSettings,
   updateSyncConfig,
   updateVocabItemText,
   type AsrModelStatus,
   type OcrModelStatus,
+  type OcrCorrectionSettings,
   type DictLookupResult,
   type DesktopSettings,
   type HealthStatus,
@@ -107,7 +111,8 @@ import avatar05Full from "./assets/avatars/500/avatar-05.jpg";
 import avatar06Full from "./assets/avatars/500/avatar-06.jpg";
 
 type ViewMode = "byPlayer" | "byTime";
-type MainMode = ViewMode | "sentences" | "space" | "profile" | "runtime" | "review";
+type MainMode = ViewMode | "sentences" | "space" | "profile" | "review";
+type ProfileSettingsPage = "account" | "export" | "ocr" | "sync" | "desktop" | "runtime";
 type SelectedSource = Pick<PlayerNode, "platform" | "source" | "series_name" | "episode_name" | "items"> | null;
 type LogEntry = { id: string; at: string; level: string; source: string; message: string };
 type SentenceGroup = {
@@ -408,13 +413,21 @@ export default function App() {
     theme_color: "#2e8f76",
     signature: "",
   });
+  const [profileSettingsPage, setProfileSettingsPage] = useState<ProfileSettingsPage>("sync");
   const [desktopSettings, setDesktopSettings] = useState<DesktopSettings>({
     notification_window_start: "18:00",
     notification_window_end: "24:00",
   });
+  const [ocrCorrectionSettings, setOcrCorrectionSettings] = useState<OcrCorrectionSettings>({
+    enabled: false,
+    api_key: "",
+    model: "glm-4.7",
+  });
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [desktopSettingBusy, setDesktopSettingBusy] = useState(false);
   const [desktopSettingsError, setDesktopSettingsError] = useState("");
+  const [ocrCorrectionBusy, setOcrCorrectionBusy] = useState(false);
+  const [ocrCorrectionError, setOcrCorrectionError] = useState("");
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ server_url: "", access_token: "", username: "", last_sync_at: "", last_server_version: 0, auto_sync_interval_minutes: 0 });
   const [loginForm, setLoginForm] = useState({
     serverUrl: DEFAULT_PUBLIC_SYNC_SERVER,
@@ -489,7 +502,7 @@ export default function App() {
     setLoading(true);
     setLibraryError("");
     try {
-      const [healthRes, nodes, timeList, sentenceList, profileRes, syncRes, spaceRes, desktopSettingRes] = await Promise.all([
+      const [healthRes, nodes, timeList, sentenceList, profileRes, syncRes, spaceRes, desktopSettingRes, ocrCorrectionRes] = await Promise.all([
         fetchHealth(),
         fetchByPlayer(),
         fetchByTime(),
@@ -498,6 +511,7 @@ export default function App() {
         fetchSyncConfig(),
         fetchDramaSpace(),
         fetchDesktopSettings(),
+        fetchOcrCorrectionSettings(),
       ]);
       setHealth(healthRes);
       if (healthRes.asr) setAsrStatus(healthRes.asr);
@@ -511,6 +525,7 @@ export default function App() {
       setLoginForm((current) => ({ ...current, serverUrl: syncRes.server_url || current.serverUrl, username: syncRes.username || current.username }));
       setSpace(spaceRes);
       setDesktopSettings(desktopSettingRes);
+      setOcrCorrectionSettings(ocrCorrectionRes);
 
       if (keepSelection && selectedHeadId) {
         setSelectedItems(await fetchHeadItems(selectedHeadId));
@@ -564,7 +579,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (view !== "runtime" || !isSidecarOnline) return;
+    if (view !== "profile" || profileSettingsPage !== "runtime" || !isSidecarOnline) return;
     fetchAsrStatus().then(setAsrStatus).catch(() => {});
     fetchOcrStatus().then(setOcrStatus).catch(() => {});
     const timer = window.setInterval(() => {
@@ -572,14 +587,14 @@ export default function App() {
       fetchOcrStatus().then(setOcrStatus).catch(() => {});
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [view, isSidecarOnline]);
+  }, [view, profileSettingsPage, isSidecarOnline]);
 
   useEffect(() => {
-    if (view !== "runtime" || !logAutoScroll) return;
+    if (view !== "profile" || profileSettingsPage !== "runtime" || !logAutoScroll) return;
     const el = logListRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [logs, view, logAutoScroll]);
+  }, [logs, view, profileSettingsPage, logAutoScroll]);
 
   useEffect(() => {
     if (view !== "profile") return;
@@ -632,6 +647,31 @@ export default function App() {
         .includes(q);
     });
   }, [timeItems, search, timeDateFilter]);
+
+  const filteredPlayerNodes = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return playerNodes;
+    return playerNodes.filter((node) => {
+      const groupText = [
+        node.series_name,
+        node.episode_name,
+        sourceLabel(node.source),
+        node.platform,
+        ...node.items.flatMap((item) => [
+          item.surface,
+          item.dictionary_form,
+          item.reading,
+          item.meanings.join(" "),
+          item.example_ja,
+          item.example_zh,
+          item.playback?.title || "",
+        ]),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return groupText.includes(q);
+    });
+  }, [playerNodes, search]);
 
   const timeDateCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -934,7 +974,8 @@ export default function App() {
     setLibraryError("");
     try {
       setAsrStatus(await startAsrModelLoad());
-      setView("runtime");
+      setProfileSettingsPage("runtime");
+      setView("profile");
     } catch (err) {
       setLibraryError(String((err as Error).message || err));
     }
@@ -944,7 +985,8 @@ export default function App() {
     setLibraryError("");
     try {
       setOcrStatus(await startOcrModelLoad());
-      setView("runtime");
+      setProfileSettingsPage("runtime");
+      setView("profile");
     } catch (err) {
       setLibraryError(String((err as Error).message || err));
     }
@@ -954,7 +996,8 @@ export default function App() {
     setLibraryError("");
     try {
       setOcrStatus(await repairOcrModel());
-      setView("runtime");
+      setProfileSettingsPage("runtime");
+      setView("profile");
     } catch (err) {
       setLibraryError(String((err as Error).message || err));
     }
@@ -1342,10 +1385,13 @@ export default function App() {
     if (!playerNodes.length) {
       return <div className="empty">暂无来源。先在 B 站扩展里保存一个词条。</div>;
     }
+    if (!filteredPlayerNodes.length) {
+      return <div className="empty">没有匹配的剧集或词条。</div>;
+    }
 
     return (
       <div className="source-list">
-        {playerNodes.map((node, idx) => {
+        {filteredPlayerNodes.map((node, idx) => {
           const key = sourceKey(node);
           const collapsed = collapsedSources.has(key);
           const groupedByHead = new Map<number, VocabItem[]>();
@@ -1756,6 +1802,21 @@ export default function App() {
       setDesktopSettingsError(String((err as Error).message || err));
     } finally {
       setDesktopSettingBusy(false);
+    }
+  }
+
+  async function onUpdateOcrCorrectionSettings(partial: Partial<OcrCorrectionSettings>) {
+    const next = { ...ocrCorrectionSettings, ...partial };
+    setOcrCorrectionSettings(next);
+    setOcrCorrectionBusy(true);
+    setOcrCorrectionError("");
+    try {
+      const saved = await updateOcrCorrectionSettings(partial);
+      setOcrCorrectionSettings(saved);
+    } catch (err) {
+      setOcrCorrectionError(String((err as Error).message || err));
+    } finally {
+      setOcrCorrectionBusy(false);
     }
   }
 
@@ -2264,9 +2325,46 @@ export default function App() {
   }
 
   function renderProfilePanel() {
+    const activeSettingsPage: ProfileSettingsPage = isProfileLocked && profileSettingsPage === "account" ? "sync" : profileSettingsPage;
+    const settingsPages: Array<{ key: ProfileSettingsPage; label: string; desc: string; icon: LucideIcon; hidden?: boolean }> = [
+      { key: "account", label: "个人信息", desc: "头像、昵称、主题色", icon: User, hidden: isProfileLocked },
+      { key: "export", label: "导出生词本", desc: "PDF 与 Excel", icon: Download },
+      { key: "ocr", label: "OCR 修正", desc: "GLM 字幕后处理", icon: Brain },
+      { key: "sync", label: "登录与同步", desc: syncConfig.username ? syncConfig.username : "云端账号", icon: Cloud },
+      { key: "desktop", label: "桌面提醒", desc: "开机启动与时间", icon: Settings },
+      { key: "runtime", label: "运行中心", desc: "模型、服务和日志", icon: Terminal },
+    ];
+
     return (
       <section className="profile-pane">
-        {!isProfileLocked ? (
+        <aside className="settings-sidebar" aria-label="设置分类">
+          <div className="settings-sidebar-head">
+            <strong>设置</strong>
+            <span>{syncConfig.username ? `已登录 ${syncConfig.username}` : "本机偏好"}</span>
+          </div>
+          <div className="settings-nav">
+            {settingsPages.filter((item) => !item.hidden).map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={activeSettingsPage === item.key ? "active" : ""}
+                  onClick={() => setProfileSettingsPage(item.key)}
+                >
+                  <Icon size={18} />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.desc}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <div className="settings-content">
+          {activeSettingsPage === "account" && !isProfileLocked ? (
           <section className="profile-card">
             <div className="section-title">
               <User size={17} />
@@ -2330,7 +2428,8 @@ export default function App() {
           </section>
         ) : null}
 
-        <section className="profile-card">
+        {activeSettingsPage === "export" ? (
+          <section className="profile-card">
           <div className="section-title">
             <Download size={17} />
             <span>导出生词本</span>
@@ -2383,40 +2482,59 @@ export default function App() {
             </button>
           </div>
         </section>
+        ) : null}
 
-        <section className="profile-card">
+        {activeSettingsPage === "ocr" ? (
+          <section className="profile-card">
           <div className="section-title">
-            <Search size={17} />
-            <span>OCR 模型修复</span>
+            <Brain size={17} />
+            <span>OCR 大模型修正</span>
           </div>
-          <p className="muted">应用启动后会在后台预热 OCR 模型。若 Windows 模型下载中断或缓存损坏，可手动修复并重新下载。</p>
-          <div className="runtime-kv">
-            <span>状态</span>
-            <strong>{ocrStatus?.load_state?.state || (ocrStatus?.loaded ? "ready" : "idle")}</strong>
-            <span>异常模型</span>
-            <strong>{ocrStatus?.broken_models?.length || 0}</strong>
-            <span>缓存目录</span>
-            <strong>{ocrStatus?.cache_dir || "-"}</strong>
-          </div>
-          {ocrStatus?.load_state?.error ? (
-            <div className="connection-card">
-              <strong>OCR 处理失败</strong>
-              <span>{ocrStatus.load_state.error}</span>
+          <p className="muted">启用后，浏览器扩展会把 OCR 识别到的中日语字幕交给 GLM 修正，用来处理促音、中日语错位和背景乱码。</p>
+          {ocrCorrectionError ? (
+            <div className="connection-card desktop-settings-error">
+              <strong>设置保存失败</strong>
+              <span>{ocrCorrectionError}</span>
             </div>
           ) : null}
-          <div className="export-actions">
-            <button className="runtime-action" onClick={onStartOcrModelLoad} disabled={!isSidecarOnline || ocrStatus?.load_state?.state === "loading"}>
-              <Download size={16} />
-              <span>{ocrStatus?.load_state?.state === "loading" ? "正在处理…" : "下载/预热 OCR"}</span>
-            </button>
-            <button className="runtime-action secondary" onClick={onRepairOcrModel} disabled={!isSidecarOnline || ocrStatus?.load_state?.state === "loading"}>
-              <RefreshCw size={16} />
-              <span>修复 OCR 模型</span>
-            </button>
+          <div className="desktop-settings-panel">
+            <label className="setting-toggle">
+              <span>启用大模型修正</span>
+              <input
+                type="checkbox"
+                checked={ocrCorrectionSettings.enabled}
+                onChange={(event) => onUpdateOcrCorrectionSettings({ enabled: event.target.checked })}
+                disabled={ocrCorrectionBusy}
+              />
+            </label>
+            <label>
+              <span>模型</span>
+              <select
+                value={ocrCorrectionSettings.model}
+                onChange={(event) => onUpdateOcrCorrectionSettings({ model: event.target.value as OcrCorrectionSettings["model"] })}
+                disabled={ocrCorrectionBusy}
+              >
+                <option value="glm-4.7">GLM-4.7</option>
+                <option value="glm-4.7-flashx">GLM-4.7-FlashX</option>
+              </select>
+            </label>
+            <label>
+              <span>智谱 API Key</span>
+              <input
+                type="password"
+                value={ocrCorrectionSettings.api_key}
+                onChange={(event) => setOcrCorrectionSettings((current) => ({ ...current, api_key: event.target.value }))}
+                onBlur={(event) => onUpdateOcrCorrectionSettings({ api_key: event.target.value })}
+                placeholder="填入 bigmodel.cn API Key"
+                disabled={ocrCorrectionBusy}
+              />
+            </label>
           </div>
         </section>
+        ) : null}
 
-        <section className="profile-card">
+        {activeSettingsPage === "sync" ? (
+          <section className="profile-card">
           <div className="section-title">
             <Cloud size={17} />
             <span>登录与同步</span>
@@ -2535,8 +2653,10 @@ export default function App() {
             </button>
           </div>
         </section>
+        ) : null}
 
-        <section className="profile-card">
+        {activeSettingsPage === "desktop" ? (
+          <section className="profile-card">
           <div className="section-title">
             <Settings size={17} />
             <span>桌面提醒</span>
@@ -2583,6 +2703,9 @@ export default function App() {
             </label>
           </div>
         </section>
+        ) : null}
+        {activeSettingsPage === "runtime" ? renderRuntimePanel() : null}
+        </div>
         {showLoginModal ? (
           <div className="modal-backdrop" role="dialog" aria-modal="true">
             <div className="sentence-edit-modal">
@@ -2718,11 +2841,8 @@ export default function App() {
           <button className={view === "space" ? "active" : ""} onClick={() => setView("space")} title="追剧空间">
             <Users size={19} />
           </button>
-          <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")} title="个人信息">
+          <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")} title="设置">
             <Settings size={19} />
-          </button>
-          <button className={view === "runtime" ? "active" : ""} onClick={() => setView("runtime")} title="运行中心">
-            <Terminal size={19} />
           </button>
         </aside>
 
@@ -2754,16 +2874,15 @@ export default function App() {
         </section> : null}
 
         <section className={
-          view === "runtime" || view === "space" || view === "profile" || view === "review"
+          view === "space" || view === "profile" || view === "review"
             ? "detail-pane detail-pane-wide"
             : "detail-pane"
         }>
-          {view === "runtime" ? renderRuntimePanel() : null}
           {view === "review" ? <ReviewDrill sidecarOnline={isSidecarOnline} /> : null}
           {view === "space" ? renderSpacePanel() : null}
           {view === "profile" ? renderProfilePanel() : null}
           {view === "sentences" ? renderSentencePanel() : null}
-          {view !== "runtime" && view !== "space" && view !== "profile" && view !== "review" ? (
+          {view !== "space" && view !== "profile" && view !== "review" ? (
           <>
           {view !== "sentences" ? (
           <>

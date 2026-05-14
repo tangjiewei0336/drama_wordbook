@@ -37,6 +37,32 @@ class OcrRecognizeResponse(BaseModel):
     raw_blocks: list[OcrBlock]
 
 
+class OcrCorrectionSettings(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    model: str = "glm-4.7"
+
+
+class OcrCorrectionSettingsUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    api_key: str | None = None
+    model: str | None = None
+
+
+class OcrCorrectionRequest(BaseModel):
+    ja_lines: list[str] = Field(default_factory=list)
+    zh_lines: list[str] = Field(default_factory=list)
+    raw_blocks: list[OcrBlock] = Field(default_factory=list)
+
+
+class OcrCorrectionResponse(BaseModel):
+    ja_lines: list[str]
+    zh_lines: list[str]
+    corrected: bool = False
+    skipped_reason: str = ""
+    model: str = "glm-4.7"
+
+
 class PlaybackContextRequest(BaseModel):
     platform: str = "bilibili"
     url: str

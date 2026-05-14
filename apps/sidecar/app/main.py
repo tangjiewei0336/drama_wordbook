@@ -24,6 +24,10 @@ from app.models.schemas import (
     JaTokenizeRequest,
     JaTokenizeResponse,
     OcrBlock,
+    OcrCorrectionRequest,
+    OcrCorrectionResponse,
+    OcrCorrectionSettings,
+    OcrCorrectionSettingsUpdateRequest,
     OcrRecognizeRequest,
     OcrRecognizeResponse,
     PartnerRequestPayload,
@@ -77,6 +81,7 @@ from app.services.ocr_service import (
     run_ocr,
     start_ocr_model_load,
 )
+from app.services.ocr_correction_service import correct_ocr_lines_with_glm
 from app.services.tokenizer_service import tokenize_ja
 from app.services.review_service import evaluate_answer as review_evaluate_answer
 from app.services.review_service import review_snapshot as review_snapshot_service
@@ -97,6 +102,7 @@ from app.services.vocab_service import (
     get_by_player,
     get_by_time,
     get_asr_settings,
+    get_ocr_correction_settings,
     get_profile,
     get_desktop_settings,
     get_partner_state,
@@ -124,6 +130,7 @@ from app.services.vocab_service import (
     save_profile,
     save_desktop_settings,
     save_asr_settings,
+    save_ocr_correction_settings,
     save_sync_config,
     schedule_sync,
     collect_shared_sentence,
@@ -202,6 +209,49 @@ def ocr_model_load():
 @app.post("/ocr/model/repair")
 def ocr_model_repair():
     return start_ocr_model_load(force_repair=True)
+
+
+@app.get("/ocr/correction/settings", response_model=OcrCorrectionSettings)
+def ocr_correction_settings_get():
+    return OcrCorrectionSettings(**get_ocr_correction_settings())
+
+
+@app.patch("/ocr/correction/settings", response_model=OcrCorrectionSettings)
+def ocr_correction_settings_patch(payload: OcrCorrectionSettingsUpdateRequest):
+    return OcrCorrectionSettings(
+        **save_ocr_correction_settings(
+            {
+                "enabled": payload.enabled,
+                "api_key": payload.api_key,
+                "model": payload.model,
+            }
+        )
+    )
+
+
+@app.post("/ocr/correct", response_model=OcrCorrectionResponse)
+def ocr_correct(payload: OcrCorrectionRequest):
+    settings = get_ocr_correction_settings()
+    model = settings.get("model") or "glm-4.7"
+    if not settings.get("enabled"):
+        return OcrCorrectionResponse(
+            ja_lines=payload.ja_lines,
+            zh_lines=payload.zh_lines,
+            corrected=False,
+            skipped_reason="disabled",
+            model=model,
+        )
+    try:
+        result = correct_ocr_lines_with_glm(
+            ja_lines=payload.ja_lines,
+            zh_lines=payload.zh_lines,
+            raw_blocks=[x.model_dump() for x in payload.raw_blocks],
+            api_key=settings.get("api_key", ""),
+            model=model,
+        )
+        return OcrCorrectionResponse(**result)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/ja/tokenize", response_model=JaTokenizeResponse)

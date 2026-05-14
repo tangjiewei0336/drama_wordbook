@@ -312,6 +312,18 @@ def _build_question_payload(conn: sqlite3.Connection, *, head_id: int, mode: Mod
 
 def _sentence_piece_models(example_ja: str) -> list[dict]:
     surfaces = _sentence_pieces(example_ja)
+    if len(surfaces) > 7:
+        merged: list[str] = []
+        target = 7
+        start = 0
+        total = len(surfaces)
+        for group_index in range(target):
+            remaining_groups = target - group_index
+            remaining_items = total - start
+            size = max(1, (remaining_items + remaining_groups - 1) // remaining_groups)
+            merged.append("".join(surfaces[start : start + size]))
+            start += size
+        surfaces = merged
     order: list[dict] = []
     for i, s in enumerate(surfaces):
         order.append({"id": f"p{i}", "surface": s, "_ord": i})
@@ -322,7 +334,7 @@ def _repair_sentence_question(q: dict) -> dict:
     """补齐旧队列里句段结构。"""
     ja = q.get("example_ja_plain") or ""
     mod = dict(q)
-    if "pieces" in mod and mod["pieces"]:
+    if "pieces" in mod and mod["pieces"] and len(mod["pieces"]) <= 7:
         return mod
     if ja:
         models = _sentence_piece_models(ja)
