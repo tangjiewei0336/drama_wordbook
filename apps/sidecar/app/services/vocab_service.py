@@ -699,40 +699,59 @@ def get_vocab_count() -> int:
         conn.close()
 
 
-def get_all_vocab_items() -> list[dict]:
+def _export_time_where(start_at: str = "", end_at: str = "", alias: str = "i") -> tuple[str, list[str]]:
+    clauses: list[str] = []
+    params: list[str] = []
+    prefix = f"{alias}." if alias else ""
+    if start_at:
+        clauses.append(f"{prefix}created_at >= ?")
+        params.append(start_at)
+    if end_at:
+        clauses.append(f"{prefix}created_at <= ?")
+        params.append(end_at)
+    return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+def get_all_vocab_items(start_at: str = "", end_at: str = "") -> list[dict]:
     """All vocab rows for export (no pagination)."""
     conn = _get_conn()
     try:
+        where_sql, params = _export_time_where(start_at, end_at, "i")
         rows = conn.execute(
-            """
+            f"""
             SELECT i.*, h.dictionary_form, s.tags_json, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
                    p.series_name, p.episode_name, s.sentence_uuid
             FROM vocab_item i
             LEFT JOIN vocab_head h ON h.id = i.head_id
             LEFT JOIN sentence s ON s.id = i.sentence_id
             LEFT JOIN playback_context p ON p.id = i.playback_context_id
+            {where_sql}
             ORDER BY i.created_at DESC
-            """
+            """,
+            params,
         ).fetchall()
         return [_row_to_item(r) for r in rows]
     finally:
         conn.close()
 
 
-def get_all_sentences_flat() -> list[dict]:
+def get_all_sentences_flat(start_at: str = "", end_at: str = "") -> list[dict]:
     """All sentences for export (no pagination)."""
     conn = _get_conn()
     try:
+        where_sql, params = _export_time_where(start_at, end_at, "s")
         rows = conn.execute(
-            """
+            f"""
             SELECT s.*, p.id AS playback_id, p.platform, p.url, p.title, p.current_time, p.duration,
                    p.series_name, p.episode_name, COUNT(i.id) AS word_count
             FROM sentence s
             LEFT JOIN playback_context p ON p.id = s.playback_context_id
             LEFT JOIN vocab_item i ON i.sentence_id = s.id
+            {where_sql}
             GROUP BY s.id
             ORDER BY s.created_at DESC
-            """
+            """,
+            params,
         ).fetchall()
         return [_row_to_sentence(r) for r in rows]
     finally:

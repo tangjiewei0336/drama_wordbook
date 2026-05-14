@@ -10,8 +10,12 @@ function formatPipelineFailure(error) {
   return shortenForUi(String(error?.message || error || "未知错误"));
 }
 
+function stripAsciiAngleBrackets(text) {
+  return String(text || "").replace(/[<>]/g, "");
+}
+
 function normalizeOcrJapaneseText(text) {
-  const source = String(text || "");
+  const source = stripAsciiAngleBrackets(text);
   const nextSmallTsuKana = "[かきくけこさしすせそたちてとぱぴぷぺぽカキクケコサシスセソタチテトパピプペポ]";
   const prevJa = "[ぁ-んァ-ン一-龯]";
   return source
@@ -862,6 +866,7 @@ async function runCapturePipeline(trigger = "unknown", options = {}) {
     });
   }
   ocrRes.ja_lines = (ocrRes.ja_lines || []).map((line) => normalizeOcrJapaneseText(line));
+  ocrRes.zh_lines = (ocrRes.zh_lines || []).map((line) => stripAsciiAngleBrackets(line).trim()).filter(Boolean);
   const jaText = (ocrRes.ja_lines || []).join(" ").trim();
   const tokenizeText = jaText || rawText;
   console.log("[wordbook] tokenize input", {

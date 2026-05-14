@@ -86,8 +86,10 @@ hiddenimports += _safe_collect_submodules(
 # (or via inline op build). PyInstaller would otherwise ship Cython as bytecode
 # only and miss these non-Python resource files.
 hiddenimports += _safe_collect_submodules("Cython")
-# openpyxl: /export/wordbook.xlsx; collect lazy submodules in frozen builds.
+# openpyxl/reportlab: /export/wordbook.xlsx + /export/wordbook.pdf; collect lazy
+# submodules in frozen builds.
 hiddenimports += _safe_collect_submodules("openpyxl")
+hiddenimports += _safe_collect_submodules("reportlab")
 # Helper libs paddleocr/paddle pull in dynamically; keep explicit so a missing
 # wheel surfaces during build instead of at runtime.
 for _ocr_hid in (
@@ -135,6 +137,7 @@ datas += _safe_collect_data_files("skimage")
 # paddle (and some image libs) read them via importlib.resources at runtime,
 # so we must bundle them as data even though Cython itself is mostly .py.
 datas += _safe_collect_data_files("Cython", include_py_files=True)
+datas += _safe_collect_data_files("reportlab", include_py_files=True)
 # PaddleX checks extras with importlib.metadata at runtime. In frozen builds,
 # these *.dist-info directories are not guaranteed to be present unless copied
 # explicitly; without them, paddlex.utils.deps reports that `OCR` dependencies

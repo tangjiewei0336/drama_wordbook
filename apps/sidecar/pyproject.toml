@@ -27,6 +27,7 @@ dependencies = [
   "sudachidict-core>=20241021",
   "pyopenjtalk>=0.4.0",
   "openpyxl>=3.1.0",
+  "reportlab>=4.2.0",
 ]
 
 [project.optional-dependencies]

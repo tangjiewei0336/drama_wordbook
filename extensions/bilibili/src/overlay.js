@@ -139,10 +139,10 @@ async function lookupMeaning(candidates) {
 }
 
 async function renderOverlay(payload) {
-  removeOverlay();
-
-  const root = createEl("div", "wb-overlay-root");
+  const root = document.getElementById(OVERLAY_ROOT_ID) || createEl("div", "wb-overlay-root");
   root.id = OVERLAY_ROOT_ID;
+  root.className = "wb-overlay-root";
+  root.replaceChildren();
   const mask = createEl("div", "wb-overlay-mask");
   const card = createEl("div", "wb-overlay-card");
   const savedSize = await loadOverlaySize();
