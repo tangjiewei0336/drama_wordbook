@@ -54,7 +54,13 @@ from app.models.schemas import (
     VocabUpdateItemRequest,
 )
 from app.services.dictionary_service import lookup_dictionary
-from app.services.export_service import build_wordbook_xlsx_bytes
+from app.services.export_service import (
+    build_wordbook_pdf_bytes,
+    build_wordbook_xlsx_bytes,
+    content_disposition,
+    export_filename,
+    normalize_export_range,
+)
 from app.services.asr_service import (
     get_asr_status,
     preload_asr_model,
@@ -66,7 +72,10 @@ from app.services.ocr_service import (
     get_ocr_lang,
     get_paddleocr_import_error,
     get_paddleocr_import_traceback,
+    get_ocr_status,
+    preload_ocr_model,
     run_ocr,
+    start_ocr_model_load,
 )
 from app.services.tokenizer_service import tokenize_ja
 from app.services.review_service import evaluate_answer as review_evaluate_answer
@@ -139,22 +148,17 @@ def on_startup():
     init_db()
     set_hf_mirror_enabled(get_asr_settings().get("hf_mirror_enabled", True))
     preload_asr_model()
+    preload_ocr_model()
 
 
 @app.get("/health")
 def health():
-    ocr_import_error = get_paddleocr_import_error()
     return {
         "status": "ok",
         "service": "drama-wordbook-sidecar",
         "time": datetime.now(timezone.utc).isoformat(),
         "asr": get_asr_status(),
-        "ocr": {
-            "available": not ocr_import_error,
-            "lang": get_ocr_lang(),
-            "import_error": ocr_import_error or None,
-            "import_traceback": get_paddleocr_import_traceback() or None,
-        },
+        "ocr": get_ocr_status(),
     }
 
 
@@ -181,6 +185,21 @@ def ocr_recognize(payload: OcrRecognizeRequest):
         zh_lines=zh_lines,
         raw_blocks=[OcrBlock(**x) for x in raw_blocks],
     )
+
+
+@app.get("/ocr/status")
+def ocr_status():
+    return get_ocr_status()
+
+
+@app.post("/ocr/model/load")
+def ocr_model_load():
+    return start_ocr_model_load(force_repair=False)
+
+
+@app.post("/ocr/model/repair")
+def ocr_model_repair():
+    return start_ocr_model_load(force_repair=True)
 
 
 @app.post("/ja/tokenize", response_model=JaTokenizeResponse)
@@ -264,17 +283,34 @@ def sentence_screenshot(sentence_id: int):
 
 
 @app.get("/export/wordbook.xlsx")
-def export_wordbook_xlsx():
-    """Export all vocab items and all sentences to two Excel sheets."""
+def export_wordbook_xlsx(start: str = "", end: str = ""):
+    """Export vocab items and sentences to two Excel sheets."""
     try:
-        body = build_wordbook_xlsx_bytes()
+        start_at, end_at = normalize_export_range(start, end)
+        body = build_wordbook_xlsx_bytes(start=start, end=end)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"export failed: {exc}") from exc
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    filename = export_filename("xlsx", start_at, end_at)
     return Response(
         content=body,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="drama-wordbook-{stamp}.xlsx"'},
+        headers={"Content-Disposition": content_disposition(filename)},
+    )
+
+
+@app.get("/export/wordbook.pdf")
+def export_wordbook_pdf(start: str = "", end: str = ""):
+    """Export vocab items as an episode-grouped study PDF."""
+    try:
+        start_at, end_at = normalize_export_range(start, end)
+        body = build_wordbook_pdf_bytes(start=start, end=end)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"export failed: {exc}") from exc
+    filename = export_filename("pdf", start_at, end_at)
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={"Content-Disposition": content_disposition(filename)},
     )
 
 

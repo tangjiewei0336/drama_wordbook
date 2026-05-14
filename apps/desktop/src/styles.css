@@ -642,7 +642,8 @@ button {
 .detail-pane-wide > .runtime-pane {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .source-stats-panel {
@@ -966,16 +967,21 @@ button {
 
 .runtime-pane {
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  height: 100%;
+  height: auto;
+  padding-right: 4px;
 }
 
 .runtime-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.runtime-card-wide {
+  grid-column: 1 / -1;
 }
 
 .runtime-card,
@@ -991,7 +997,7 @@ button {
   display: grid;
   grid-template-columns: 82px minmax(0, 1fr);
   gap: 9px 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .runtime-kv span {
@@ -1032,6 +1038,55 @@ button {
 .runtime-action.compact {
   height: 32px;
   font-size: 13px;
+}
+
+.runtime-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.download-setting-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  color: #475467;
+}
+
+.download-setting-row.compact {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #e7ebef;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.download-setting-row div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.download-setting-row strong {
+  color: #263241;
+  font-size: 13px;
+}
+
+.download-setting-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #667085;
+  font-size: 12px;
+}
+
+.download-setting-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
 }
 
 .sentence-panel {
@@ -2194,6 +2249,18 @@ button {
   opacity: 0.68;
 }
 
+.export-range-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .avatar-row {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
@@ -2493,15 +2560,41 @@ button {
   gap: 12px;
 }
 
+.log-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .log-list {
+  flex: none;
   min-height: 0;
+  height: clamp(260px, 42vh, 520px);
+  max-height: none;
   overflow: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 10px;
   border-radius: 8px;
   background: #111827;
+  scrollbar-color: #475467 #111827;
+  scrollbar-width: thin;
+}
+
+.log-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.log-list::-webkit-scrollbar-track {
+  background: #111827;
+}
+
+.log-list::-webkit-scrollbar-thumb {
+  border: 2px solid #111827;
+  border-radius: 999px;
+  background: #475467;
 }
 
 .log-line {

@@ -5,7 +5,10 @@ import io
 import logging
 import os
 import re
+import shutil
+import threading
 import traceback
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -14,9 +17,34 @@ from PIL import Image
 
 logger = logging.getLogger("wordbook.sidecar.ocr")
 
+OCR_PRELOAD = os.getenv("DRAMA_WORDBOOK_OCR_PRELOAD", "1") != "0"
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+os.environ.setdefault("PADDLE_PDX_HUGGING_FACE_ENDPOINT", os.getenv("ASR_HF_ENDPOINT", "https://hf-mirror.com"))
+_OCR_MODEL_NAMES = (
+    "PP-OCRv5_server_det",
+    "PP-OCRv5_mobile_det",
+    "PP-OCRv5_server_rec",
+    "PP-OCRv5_mobile_rec",
+    "PP-OCRv5_server_cls",
+    "PP-LCNet_x1_0_doc_ori",
+    "UVDoc",
+)
+_ocr_load_lock = threading.Lock()
+_ocr_load_state = {
+    "state": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "error": "",
+    "repaired": [],
+}
 
-def _ensure_paddleocr_base_dir() -> None:
-    """PaddleOCR 在首次 import 时读取 PADDLE_OCR_BASE_DIR；默认 ~/.paddleocr 在无写 HOME 时会失败。
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_paddle_model_dirs() -> None:
+    """PaddleOCR/PaddleX read cache dirs at import time; set them before import.
 
     Resolution order: explicit override → packaged user-data dir → dev fallback.
     The user-data option means OCR model weights (~hundreds of MB) survive app
@@ -31,19 +59,30 @@ def _ensure_paddleocr_base_dir() -> None:
         base = Path(explicit).expanduser().resolve()
         base.mkdir(parents=True, exist_ok=True)
         os.environ["PADDLE_OCR_BASE_DIR"] = str(base) + os.sep
+        paddlex = Path(os.environ.get("PADDLE_PDX_CACHE_HOME") or base.parent / "paddlex").expanduser().resolve()
+        paddlex.mkdir(parents=True, exist_ok=True)
+        os.environ["PADDLE_PDX_CACHE_HOME"] = str(paddlex)
         return
     data_dir = os.environ.get("DRAMA_WORDBOOK_DATA_DIR", "").strip()
     if data_dir:
-        base = Path(data_dir).expanduser().resolve() / "paddleocr"
-        base.mkdir(parents=True, exist_ok=True)
-        os.environ["PADDLE_OCR_BASE_DIR"] = str(base) + os.sep
+        root = Path(data_dir).expanduser().resolve()
+        ocr_base = root / "paddleocr"
+        paddlex_base = Path(os.environ.get("PADDLE_PDX_CACHE_HOME") or root / "paddlex").expanduser().resolve()
+        ocr_base.mkdir(parents=True, exist_ok=True)
+        paddlex_base.mkdir(parents=True, exist_ok=True)
+        os.environ["PADDLE_OCR_BASE_DIR"] = str(ocr_base) + os.sep
+        os.environ["PADDLE_PDX_CACHE_HOME"] = str(paddlex_base)
         return
-    root = Path(__file__).resolve().parent.parent / "data" / "paddleocr"
-    root.mkdir(parents=True, exist_ok=True)
-    os.environ["PADDLE_OCR_BASE_DIR"] = str(root) + os.sep
+    root = Path(__file__).resolve().parent.parent / "data"
+    ocr_base = root / "paddleocr"
+    paddlex_base = root / "paddlex"
+    ocr_base.mkdir(parents=True, exist_ok=True)
+    paddlex_base.mkdir(parents=True, exist_ok=True)
+    os.environ["PADDLE_OCR_BASE_DIR"] = str(ocr_base) + os.sep
+    os.environ["PADDLE_PDX_CACHE_HOME"] = str(paddlex_base)
 
 
-_ensure_paddleocr_base_dir()
+_ensure_paddle_model_dirs()
 
 # Surface the real import error (missing wheel, broken hidden import, ABI mismatch …)
 # instead of swallowing it and showing the generic "not available" message later.
@@ -90,6 +129,97 @@ def get_ocr_lang() -> str:
 def get_paddleocr_import_error() -> str:
     """Expose the import-time error string (for /health and clearer 500 detail)."""
     return _PADDLEOCR_IMPORT_ERROR
+
+
+def _paddlex_cache_dir() -> Path:
+    return Path(os.environ.get("PADDLE_PDX_CACHE_HOME") or "~/.paddlex").expanduser().resolve()
+
+
+def _official_models_dir() -> Path:
+    return _paddlex_cache_dir() / "official_models"
+
+
+def _model_dir_is_incomplete(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+    if (path / "inference.json").exists():
+        return False
+    has_payload = any(path.glob("*.pdmodel")) or any(path.glob("*.onnx")) or any(path.glob("*.json"))
+    return path.name in _OCR_MODEL_NAMES or has_payload
+
+
+def _is_ocr_model_cache_dir(path: Path) -> bool:
+    return path.is_dir() and (path.name in _OCR_MODEL_NAMES or path.name.startswith("PP-OCR"))
+
+
+def _find_incomplete_ocr_model_dirs() -> list[Path]:
+    root = _official_models_dir()
+    if not root.exists():
+        return []
+    return [child for child in root.iterdir() if _model_dir_is_incomplete(child)]
+
+
+def repair_ocr_model_cache(force: bool = False) -> dict:
+    """Delete PaddleX OCR official model folders so PaddleX can re-download."""
+    root = _official_models_dir()
+    if force and root.exists():
+        targets = [child for child in root.iterdir() if _is_ocr_model_cache_dir(child)]
+    else:
+        targets = _find_incomplete_ocr_model_dirs()
+    repaired: list[str] = []
+    for path in targets:
+        try:
+            shutil.rmtree(path)
+            repaired.append(str(path))
+            logger.warning("Removed OCR model cache: %s", path)
+        except Exception as exc:
+            logger.warning("Failed to remove OCR model cache %s: %s", path, exc)
+            raise RuntimeError(f"无法删除 OCR 模型缓存：{path} ({exc})") from exc
+    return {"ok": True, "repaired": repaired, "cache_dir": str(_paddlex_cache_dir())}
+
+
+def _ocr_model_status() -> dict:
+    root = _official_models_dir()
+    models = []
+    if root.exists():
+        for child in sorted(root.iterdir(), key=lambda p: p.name):
+            if not child.is_dir():
+                continue
+            if child.name not in _OCR_MODEL_NAMES and not child.name.startswith("PP-OCR"):
+                continue
+            models.append(
+                {
+                    "name": child.name,
+                    "path": str(child),
+                    "ready": (child / "inference.json").exists(),
+                    "incomplete": _model_dir_is_incomplete(child),
+                }
+            )
+    return {
+        "cache_dir": str(_paddlex_cache_dir()),
+        "official_models_dir": str(root),
+        "models": models,
+        "broken_models": [x for x in models if x["incomplete"]],
+    }
+
+
+def get_ocr_status() -> dict:
+    with _ocr_load_lock:
+        load_state = dict(_ocr_load_state)
+    loaded = get_ocr_engine_for_lang.cache_info().currsize > 0
+    if loaded and load_state.get("state") in {"idle", "loading"}:
+        load_state = {**load_state, "state": "ready", "finished_at": load_state.get("finished_at") or _utc_now()}
+    model_status = _ocr_model_status()
+    return {
+        "available": not _PADDLEOCR_IMPORT_ERROR,
+        "loaded": loaded,
+        "preload": OCR_PRELOAD,
+        "lang": get_ocr_lang(),
+        "import_error": _PADDLEOCR_IMPORT_ERROR or None,
+        "import_traceback": _PADDLEOCR_IMPORT_TRACEBACK or None,
+        "load_state": load_state,
+        **model_status,
+    }
 
 
 JA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
@@ -172,6 +302,7 @@ def get_ocr_engine_for_lang(lang: str):
         return None
     _patch_paddle_analysis_config()
     try:
+        repair_ocr_model_cache()
         return PaddleOCR(
             lang=lang,
             use_doc_orientation_classify=False,
@@ -179,6 +310,19 @@ def get_ocr_engine_for_lang(lang: str):
             use_textline_orientation=False,
         )
     except Exception as exc:  # pragma: no cover - env specific
+        if _looks_like_missing_model_file(exc):
+            logger.warning("OCR model cache looks incomplete; repairing and retrying once: %s", exc)
+            get_ocr_engine_for_lang.cache_clear()
+            repair_ocr_model_cache()
+            try:
+                return PaddleOCR(
+                    lang=lang,
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_textline_orientation=False,
+                )
+            except Exception as retry_exc:
+                exc = retry_exc
         logger.exception("PaddleOCR initialization failed (lang=%s)", lang)
         hint = ""
         if "set_optimization_level" in str(exc):
@@ -197,6 +341,69 @@ def get_ocr_engine_for_lang(lang: str):
 def get_ocr_engine():
     """Backwards-compatible accessor; returns the default-lang engine."""
     return get_ocr_engine_for_lang(_default_ocr_lang())
+
+
+def _looks_like_missing_model_file(exc: Exception) -> bool:
+    text = "".join(traceback.format_exception_only(type(exc), exc))
+    return (
+        "inference.json" in text
+        or "Cannot open file" in text
+        or "IsFileExists" in text
+        or "official_models" in text
+    )
+
+
+def _load_ocr_model_for_management(force_repair: bool = False) -> None:
+    global _ocr_load_state
+    with _ocr_load_lock:
+        _ocr_load_state = {
+            "state": "loading",
+            "started_at": _utc_now(),
+            "finished_at": None,
+            "error": "",
+            "repaired": [],
+        }
+    try:
+        repaired = repair_ocr_model_cache(force=force_repair)["repaired"]
+        if force_repair:
+            get_ocr_engine_for_lang.cache_clear()
+        get_ocr_engine_for_lang(_default_ocr_lang())
+        with _ocr_load_lock:
+            _ocr_load_state = {
+                **_ocr_load_state,
+                "state": "ready",
+                "finished_at": _utc_now(),
+                "error": "",
+                "repaired": repaired,
+            }
+    except Exception as exc:  # pragma: no cover
+        logger.warning("OCR model preload/load failed: %s", exc)
+        with _ocr_load_lock:
+            _ocr_load_state = {
+                **_ocr_load_state,
+                "state": "error",
+                "finished_at": _utc_now(),
+                "error": "".join(traceback.format_exception_only(type(exc), exc)).strip(),
+            }
+
+
+def start_ocr_model_load(force_repair: bool = False) -> dict:
+    status = get_ocr_status()
+    if status["loaded"] and not force_repair and not status.get("broken_models"):
+        with _ocr_load_lock:
+            _ocr_load_state.update({"state": "ready", "finished_at": _ocr_load_state.get("finished_at") or _utc_now(), "error": ""})
+        return get_ocr_status()
+    with _ocr_load_lock:
+        if _ocr_load_state.get("state") == "loading":
+            return status
+    thread = threading.Thread(target=_load_ocr_model_for_management, args=(force_repair,), daemon=True)
+    thread.start()
+    return get_ocr_status()
+
+
+def preload_ocr_model() -> None:
+    if OCR_PRELOAD:
+        start_ocr_model_load(force_repair=False)
 
 
 def decode_base64_image(image_base64: str) -> Image.Image:

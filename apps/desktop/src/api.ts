@@ -71,9 +71,29 @@ export type HealthStatus = {
       cache_paths: string[];
     };
   };
+  ocr?: {
+    available: boolean;
+    loaded: boolean;
+    preload: boolean;
+    lang: string;
+    cache_dir?: string;
+    official_models_dir?: string;
+    import_error?: string | null;
+    import_traceback?: string | null;
+    load_state?: {
+      state: string;
+      started_at: string | null;
+      finished_at: string | null;
+      error: string;
+      repaired?: string[];
+    };
+    broken_models?: Array<{ name: string; path: string; ready: boolean; incomplete: boolean }>;
+    models?: Array<{ name: string; path: string; ready: boolean; incomplete: boolean }>;
+  };
 };
 
 export type AsrModelStatus = NonNullable<HealthStatus["asr"]>;
+export type OcrModelStatus = NonNullable<HealthStatus["ocr"]>;
 
 export type AsrSettings = {
   hf_mirror_enabled: boolean;
@@ -234,6 +254,26 @@ export async function startAsrModelLoad(): Promise<AsrModelStatus> {
   return (await res.json()) as AsrModelStatus;
 }
 
+export async function fetchOcrStatus(): Promise<OcrModelStatus> {
+  return getJson<OcrModelStatus>("/ocr/status");
+}
+
+export async function startOcrModelLoad(): Promise<OcrModelStatus> {
+  const res = await fetch(`${SIDECAR_BASE}/ocr/model/load`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `OCR 模型加载失败（${res.status}）`));
+  }
+  return (await res.json()) as OcrModelStatus;
+}
+
+export async function repairOcrModel(): Promise<OcrModelStatus> {
+  const res = await fetch(`${SIDECAR_BASE}/ocr/model/repair`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `OCR 模型修复失败（${res.status}）`));
+  }
+  return (await res.json()) as OcrModelStatus;
+}
+
 export async function updateAsrSettings(payload: Partial<AsrSettings>): Promise<AsrSettings> {
   const res = await fetch(`${SIDECAR_BASE}/asr/settings`, {
     method: "PATCH",
@@ -273,17 +313,23 @@ export async function deleteSentence(sentenceId: number): Promise<{ ok: boolean;
   return (await res.json()) as { ok: boolean; deleted_sentence_id: number; deleted_word_count: number };
 }
 
-/** 将本地全部生词条目与句子导出为 Excel（工作表「生词」「句子」）。 */
-export async function downloadWordbookExcel(): Promise<void> {
-  const res = await fetch(`${SIDECAR_BASE}/export/wordbook.xlsx`);
-  if (!res.ok) {
-    throw new Error(await parseApiError(res, `导出失败（${res.status}）`));
-  }
-  const blob = await res.blob();
-  const cd = res.headers.get("Content-Disposition") || "";
-  const m = /filename="([^"]+)"/.exec(cd);
-  const fallback = `drama-wordbook-${new Date().toISOString().slice(0, 10)}.xlsx`;
-  const name = m?.[1] || fallback;
+export type ExportRange = {
+  start?: string;
+  end?: string;
+};
+
+function exportQuery(range?: ExportRange): string {
+  const params = new URLSearchParams();
+  if (range?.start) params.set("start", range.start);
+  if (range?.end) params.set("end", range.end);
+  const text = params.toString();
+  return text ? `?${text}` : "";
+}
+
+function downloadBlob(blob: Blob, contentDisposition: string, fallback: string): void {
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
+  const quoted = /filename="([^"]+)"/i.exec(contentDisposition);
+  const name = utf8?.[1] ? decodeURIComponent(utf8[1]) : quoted?.[1] || fallback;
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");
@@ -296,6 +342,30 @@ export async function downloadWordbookExcel(): Promise<void> {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** 将本地生词条目与句子导出为 Excel（工作表「生词」「句子」）。 */
+export async function downloadWordbookExcel(range?: ExportRange): Promise<void> {
+  const res = await fetch(`${SIDECAR_BASE}/export/wordbook.xlsx${exportQuery(range)}`);
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `导出失败（${res.status}）`));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") || "";
+  const fallback = `drama-wordbook-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  downloadBlob(blob, cd, fallback);
+}
+
+/** 按剧集导出学习 PDF（生词、读音、音调、词性、例句和小剧照）。 */
+export async function downloadWordbookPdf(range?: ExportRange): Promise<void> {
+  const res = await fetch(`${SIDECAR_BASE}/export/wordbook.pdf${exportQuery(range)}`);
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `导出失败（${res.status}）`));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") || "";
+  const fallback = `drama-wordbook-${new Date().toISOString().slice(0, 10)}.pdf`;
+  downloadBlob(blob, cd, fallback);
 }
 
 export async function fetchDramaSpace(): Promise<DramaSpace> {

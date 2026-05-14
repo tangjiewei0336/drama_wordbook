@@ -2,6 +2,7 @@ const { app, BrowserWindow, Notification, ipcMain, shell } = require("electron")
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 
 const useDevServer = process.env.DRAMA_WORDBOOK_DESKTOP_DEV === "1";
@@ -230,6 +231,16 @@ function resolveBundledSidecarCommand(sidecarDir) {
 function resolveSidecarDataDir() {
   const nextSidecarDataDir = path.join(app.getPath("userData"), "sidecar-data");
   const legacySidecarDataDir = path.join(app.getPath("appData"), "Drama Wordbook", "sidecar-data");
+  if (process.platform === "win32" && /[^\x00-\x7F]/.test(nextSidecarDataDir)) {
+    const programData = process.env.ProgramData || path.join(path.parse(os.homedir()).root || "C:\\", "ProgramData");
+    const asciiSidecarDataDir = path.join(programData, "DramaWordbook", "sidecar-data");
+    try {
+      fs.mkdirSync(asciiSidecarDataDir, { recursive: true });
+      return asciiSidecarDataDir;
+    } catch (error) {
+      addLog("warn", "desktop", `Could not use ASCII sidecar data dir: ${error.message}`);
+    }
+  }
   if (fs.existsSync(legacySidecarDataDir) && !fs.existsSync(nextSidecarDataDir)) {
     return legacySidecarDataDir;
   }
@@ -370,8 +381,12 @@ async function startSidecar() {
   // Persist user data outside the app bundle so reinstalls/auto-updates do not
   // wipe the local sqlite DB and screenshots.
   const sidecarDataDir = process.env.DRAMA_WORDBOOK_DATA_DIR || resolveSidecarDataDir();
+  const paddleOcrDir = path.join(sidecarDataDir, "paddleocr");
+  const paddleXDir = path.join(sidecarDataDir, "paddlex");
   try {
     fs.mkdirSync(sidecarDataDir, { recursive: true });
+    fs.mkdirSync(paddleOcrDir, { recursive: true });
+    fs.mkdirSync(paddleXDir, { recursive: true });
   } catch (error) {
     addLog("warn", "desktop", `Could not pre-create sidecar data dir: ${error.message}`);
   }
@@ -383,6 +398,11 @@ async function startSidecar() {
       PYTHONUNBUFFERED: "1",
       ASR_PRELOAD: process.env.ASR_PRELOAD || "0",
       DRAMA_WORDBOOK_DATA_DIR: process.env.DRAMA_WORDBOOK_DATA_DIR || sidecarDataDir,
+      DRAMA_WORDBOOK_OCR_PRELOAD: process.env.DRAMA_WORDBOOK_OCR_PRELOAD || "1",
+      PADDLE_OCR_BASE_DIR: process.env.PADDLE_OCR_BASE_DIR || `${paddleOcrDir}${path.sep}`,
+      PADDLE_PDX_CACHE_HOME: process.env.PADDLE_PDX_CACHE_HOME || paddleXDir,
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: process.env.PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK || "True",
+      PADDLE_PDX_HUGGING_FACE_ENDPOINT: process.env.PADDLE_PDX_HUGGING_FACE_ENDPOINT || process.env.ASR_HF_ENDPOINT || "https://hf-mirror.com",
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,

@@ -15,6 +15,7 @@ import {
   Search,
   Server,
   Settings,
+  SlidersHorizontal,
   Sparkles,
   Save,
   MessageSquareText,
@@ -32,10 +33,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import uniLogo from "./assets/uni-logo.png";
 import {
   fetchAsrStatus,
+  fetchOcrStatus,
   deletePlayerGroup,
   deleteVocabItem,
   deleteSentence,
   downloadWordbookExcel,
+  downloadWordbookPdf,
   fetchByPlayer,
   fetchByTime,
   createPartnerRequest,
@@ -65,6 +68,8 @@ import {
   DEFAULT_PUBLIC_SYNC_SERVER,
   SIDECAR_BASE,
   startAsrModelLoad,
+  startOcrModelLoad,
+  repairOcrModel,
   tokenizeJapanese,
   updateSentence,
   updateAsrSettings,
@@ -72,6 +77,7 @@ import {
   updateSyncConfig,
   updateVocabItemText,
   type AsrModelStatus,
+  type OcrModelStatus,
   type DictLookupResult,
   type DesktopSettings,
   type HealthStatus,
@@ -387,7 +393,10 @@ export default function App() {
   const autoSyncRunningRef = useRef(false);
   const [sidecarStatus, setSidecarStatus] = useState<SidecarProcessStatus | null>(null);
   const [asrStatus, setAsrStatus] = useState<AsrModelStatus | null>(null);
+  const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const logListRef = useRef<HTMLDivElement | null>(null);
+  const [logAutoScroll, setLogAutoScroll] = useState(true);
   const [playerNodes, setPlayerNodes] = useState<PlayerNode[]>([]);
   const [timeItems, setTimeItems] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceRecord[]>([]);
@@ -446,7 +455,9 @@ export default function App() {
   const [libraryError, setLibraryError] = useState("");
   const [profileError, setProfileError] = useState("");
   const [exportExcelBusy, setExportExcelBusy] = useState(false);
+  const [exportPdfBusy, setExportPdfBusy] = useState(false);
   const [exportExcelError, setExportExcelError] = useState("");
+  const [exportRange, setExportRange] = useState({ start: "", end: "" });
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [timeDateFilter, setTimeDateFilter] = useState("");
@@ -490,6 +501,7 @@ export default function App() {
       ]);
       setHealth(healthRes);
       if (healthRes.asr) setAsrStatus(healthRes.asr);
+      if (healthRes.ocr) setOcrStatus(healthRes.ocr);
       setPlayerNodes(nodes);
       setTimeItems(timeList);
       setSentences(sentenceList.items || []);
@@ -554,11 +566,20 @@ export default function App() {
   useEffect(() => {
     if (view !== "runtime" || !isSidecarOnline) return;
     fetchAsrStatus().then(setAsrStatus).catch(() => {});
+    fetchOcrStatus().then(setOcrStatus).catch(() => {});
     const timer = window.setInterval(() => {
       fetchAsrStatus().then(setAsrStatus).catch(() => {});
+      fetchOcrStatus().then(setOcrStatus).catch(() => {});
     }, 2000);
     return () => window.clearInterval(timer);
   }, [view, isSidecarOnline]);
+
+  useEffect(() => {
+    if (view !== "runtime" || !logAutoScroll) return;
+    const el = logListRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logs, view, logAutoScroll]);
 
   useEffect(() => {
     if (view !== "profile") return;
@@ -913,6 +934,26 @@ export default function App() {
     setLibraryError("");
     try {
       setAsrStatus(await startAsrModelLoad());
+      setView("runtime");
+    } catch (err) {
+      setLibraryError(String((err as Error).message || err));
+    }
+  }
+
+  async function onStartOcrModelLoad() {
+    setLibraryError("");
+    try {
+      setOcrStatus(await startOcrModelLoad());
+      setView("runtime");
+    } catch (err) {
+      setLibraryError(String((err as Error).message || err));
+    }
+  }
+
+  async function onRepairOcrModel() {
+    setLibraryError("");
+    try {
+      setOcrStatus(await repairOcrModel());
       setView("runtime");
     } catch (err) {
       setLibraryError(String((err as Error).message || err));
@@ -1416,11 +1457,23 @@ export default function App() {
       loadState === "loading" ? "下载/加载中" : asrStatus?.loaded ? "已加载" : loadState === "error" ? "失败" : "未加载";
     const progress = asrStatus?.download_progress;
     const progressPercent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+    const ocrLoadState = ocrStatus?.load_state?.state || "idle";
+    const ocrBrokenCount = Number(ocrStatus?.broken_models?.length || 0);
+    const ocrLabel =
+      ocrLoadState === "loading"
+        ? "下载/修复中"
+        : ocrStatus?.loaded
+          ? "已就绪"
+          : ocrBrokenCount
+            ? "需要修复"
+            : ocrLoadState === "error"
+              ? "失败"
+              : "准备中";
 
     return (
       <section className="runtime-pane">
         <div className="runtime-grid">
-          <section className="runtime-card">
+          <section className="runtime-card runtime-card-wide">
             <div className="section-title">
               <Server size={17} />
               <span>Sidecar</span>
@@ -1435,10 +1488,55 @@ export default function App() {
               <span>信息</span>
               <strong>{sidecarStatus?.message || "-"}</strong>
             </div>
-            <button className="runtime-action" onClick={onRestartSidecar}>
-              <RefreshCw size={16} />
-              <span>重启 Sidecar</span>
-            </button>
+            <div className="runtime-card-footer">
+              <label className="download-setting-row compact">
+                <SlidersHorizontal size={16} />
+                <div>
+                  <strong>模型下载使用 hf-mirror</strong>
+                  <span>ASR: {asrStatus?.hf_endpoint || "official"} · OCR: https://hf-mirror.com</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={asrStatus?.hf_mirror_enabled ?? true}
+                  onChange={(event) => onToggleAsrHfMirror(event.target.checked)}
+                  disabled={loadState === "loading"}
+                  title="使用 hf-mirror 下载"
+                />
+              </label>
+              <button className="runtime-action" onClick={onRestartSidecar}>
+                <RefreshCw size={16} />
+                <span>重启 Sidecar</span>
+              </button>
+            </div>
+          </section>
+
+          <section className="runtime-card">
+            <div className="section-title">
+              <Search size={17} />
+              <span>OCR 模型</span>
+            </div>
+            <div className="model-status">
+              <div className={`model-badge ${ocrStatus?.loaded ? "ready" : ocrBrokenCount ? "error" : ocrLoadState}`}>
+                {ocrLabel}
+              </div>
+              <h2>{ocrStatus?.lang || "ch"}</h2>
+              <p>缓存目录：{ocrStatus?.cache_dir || "-"}</p>
+              <p>已发现模型：{ocrStatus?.models?.length || 0} · 异常：{ocrBrokenCount}</p>
+            </div>
+            {ocrStatus?.load_state?.error ? <div className="runtime-error">{ocrStatus.load_state.error}</div> : null}
+            {ocrBrokenCount ? (
+              <div className="runtime-error">发现不完整 OCR 模型缓存，会在修复时删除并重新下载。</div>
+            ) : null}
+            <div className="export-actions">
+              <button className="runtime-action" onClick={onStartOcrModelLoad} disabled={ocrLoadState === "loading"}>
+                <Download size={16} />
+                <span>{ocrLoadState === "loading" ? "正在处理" : "下载/预热 OCR"}</span>
+              </button>
+              <button className="runtime-action secondary" onClick={onRepairOcrModel} disabled={ocrLoadState === "loading"}>
+                <RefreshCw size={16} />
+                <span>修复 OCR 模型</span>
+              </button>
+            </div>
           </section>
 
           <section className="runtime-card">
@@ -1458,15 +1556,6 @@ export default function App() {
                 HF endpoint: {asrStatus?.hf_endpoint || "official"}
               </p>
             </div>
-            <label className="setting-toggle runtime-toggle">
-              <span>使用 hf-mirror 下载</span>
-              <input
-                type="checkbox"
-                checked={asrStatus?.hf_mirror_enabled ?? true}
-                onChange={(event) => onToggleAsrHfMirror(event.target.checked)}
-                disabled={loadState === "loading"}
-              />
-            </label>
             {progress ? (
               <div className="model-progress">
                 <div className="progress-track">
@@ -1494,9 +1583,14 @@ export default function App() {
               <Terminal size={17} />
               <span>日志</span>
             </div>
-            <button className="link-button" onClick={onClearLogs}>清空</button>
+            <div className="log-actions">
+              <button className="link-button" onClick={() => setLogAutoScroll((value) => !value)}>
+                {logAutoScroll ? "暂停滚动" : "跟随底部"}
+              </button>
+              <button className="link-button" onClick={onClearLogs}>清空</button>
+            </div>
           </div>
-          <div className="log-list">
+          <div className="log-list" ref={logListRef}>
             {logs.length ? (
               logs.map((entry) => (
                 <div className={`log-line ${entry.level}`} key={entry.id}>
@@ -1554,11 +1648,24 @@ export default function App() {
     setExportExcelError("");
     setExportExcelBusy(true);
     try {
-      await downloadWordbookExcel();
+      await downloadWordbookExcel(exportRange);
     } catch (err) {
       setExportExcelError(String((err as Error).message || err));
     } finally {
       setExportExcelBusy(false);
+    }
+  }
+
+  async function onExportWordbookPdf() {
+    if (!isSidecarOnline) return;
+    setExportExcelError("");
+    setExportPdfBusy(true);
+    try {
+      await downloadWordbookPdf(exportRange);
+    } catch (err) {
+      setExportExcelError(String((err as Error).message || err));
+    } finally {
+      setExportPdfBusy(false);
     }
   }
 
@@ -2226,24 +2333,87 @@ export default function App() {
         <section className="profile-card">
           <div className="section-title">
             <Download size={17} />
-            <span>导出到 Excel</span>
+            <span>导出生词本</span>
           </div>
-          <p className="muted">将所有生词条目与收藏句子分别导出到两个工作表（「生词」「句子」），便于备份或在外部表格中筛选。</p>
+          <p className="muted">选择收藏时间段后导出。Excel 保留「生词」「句子」两个工作表；PDF 按剧集排版，包含读音、音调、词性、例句和小剧照。</p>
+          <div className="export-range-grid">
+            <label>
+              <span>开始日期</span>
+              <input
+                type="date"
+                value={exportRange.start}
+                onChange={(event) => setExportRange((current) => ({ ...current, start: event.target.value }))}
+                disabled={loading || exportExcelBusy || exportPdfBusy}
+              />
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input
+                type="date"
+                value={exportRange.end}
+                onChange={(event) => setExportRange((current) => ({ ...current, end: event.target.value }))}
+                disabled={loading || exportExcelBusy || exportPdfBusy}
+              />
+            </label>
+          </div>
           {exportExcelError ? (
             <div className="connection-card">
               <strong>导出失败</strong>
               <span>{exportExcelError}</span>
             </div>
           ) : null}
-          <button
-            type="button"
-            className="runtime-action"
-            onClick={onExportWordbookExcel}
-            disabled={loading || exportExcelBusy || !isSidecarOnline}
-          >
-            <Download size={16} />
-            <span>{exportExcelBusy ? "正在生成…" : "下载 Excel"}</span>
-          </button>
+          <div className="export-actions">
+            <button
+              type="button"
+              className="runtime-action"
+              onClick={onExportWordbookPdf}
+              disabled={loading || exportPdfBusy || exportExcelBusy || !isSidecarOnline}
+            >
+              <Download size={16} />
+              <span>{exportPdfBusy ? "正在生成…" : "下载 PDF"}</span>
+            </button>
+            <button
+              type="button"
+              className="runtime-action secondary"
+              onClick={onExportWordbookExcel}
+              disabled={loading || exportExcelBusy || exportPdfBusy || !isSidecarOnline}
+            >
+              <Download size={16} />
+              <span>{exportExcelBusy ? "正在生成…" : "下载 Excel"}</span>
+            </button>
+          </div>
+        </section>
+
+        <section className="profile-card">
+          <div className="section-title">
+            <Search size={17} />
+            <span>OCR 模型修复</span>
+          </div>
+          <p className="muted">应用启动后会在后台预热 OCR 模型。若 Windows 模型下载中断或缓存损坏，可手动修复并重新下载。</p>
+          <div className="runtime-kv">
+            <span>状态</span>
+            <strong>{ocrStatus?.load_state?.state || (ocrStatus?.loaded ? "ready" : "idle")}</strong>
+            <span>异常模型</span>
+            <strong>{ocrStatus?.broken_models?.length || 0}</strong>
+            <span>缓存目录</span>
+            <strong>{ocrStatus?.cache_dir || "-"}</strong>
+          </div>
+          {ocrStatus?.load_state?.error ? (
+            <div className="connection-card">
+              <strong>OCR 处理失败</strong>
+              <span>{ocrStatus.load_state.error}</span>
+            </div>
+          ) : null}
+          <div className="export-actions">
+            <button className="runtime-action" onClick={onStartOcrModelLoad} disabled={!isSidecarOnline || ocrStatus?.load_state?.state === "loading"}>
+              <Download size={16} />
+              <span>{ocrStatus?.load_state?.state === "loading" ? "正在处理…" : "下载/预热 OCR"}</span>
+            </button>
+            <button className="runtime-action secondary" onClick={onRepairOcrModel} disabled={!isSidecarOnline || ocrStatus?.load_state?.state === "loading"}>
+              <RefreshCw size={16} />
+              <span>修复 OCR 模型</span>
+            </button>
+          </div>
         </section>
 
         <section className="profile-card">

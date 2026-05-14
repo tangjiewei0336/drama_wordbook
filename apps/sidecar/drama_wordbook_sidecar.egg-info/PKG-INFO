@@ -16,5 +16,6 @@ Requires-Dist: sudachipy>=0.6.8
 Requires-Dist: sudachidict-core>=20241021
 Requires-Dist: pyopenjtalk>=0.4.0
 Requires-Dist: openpyxl>=3.1.0
+Requires-Dist: reportlab>=4.2.0
 Provides-Extra: packaging
 Requires-Dist: pyinstaller>=6.11.0; extra == "packaging"
