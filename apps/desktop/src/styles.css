@@ -2792,6 +2792,7 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
   margin-bottom: 14px;
   color: #6b7380;
   font-size: 0.9rem;
@@ -2864,6 +2865,26 @@ button {
   background: rgba(46, 143, 118, 0.1);
   border-color: rgba(46, 143, 118, 0.55);
   box-shadow: 0 0 0 2px rgba(46, 143, 118, 0.12);
+}
+
+.review-pane button.review-skip-button {
+  width: auto;
+  min-height: 32px;
+  margin-left: auto;
+  padding: 6px 10px;
+  color: #667085;
+  font-size: 12px;
+  text-align: center;
+}
+
+.review-pane button.review-abort-button {
+  width: auto;
+  min-height: 36px;
+  padding: 8px 12px;
+  color: #b84634;
+  background: #fff7f5;
+  border-color: rgba(214, 95, 74, 0.28);
+  text-align: center;
 }
 
 .review-reading .reading-hint {

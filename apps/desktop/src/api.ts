@@ -642,6 +642,10 @@ export type ReviewAnswerResult = {
   reading_stage: string;
   head_state: { mastered?: boolean; distinct_days?: number; updated?: boolean };
   advanced?: boolean;
+  skipped?: boolean;
+  skipped_question_id?: string;
+  aborted?: boolean;
+  remaining_before_abort?: number;
 };
 
 /** 本地日历日（浏览器时区）*/
@@ -669,12 +673,19 @@ export async function postReviewStart(calendar_day: string, question_limit: numb
   return (await res.json()) as ReviewStartResult;
 }
 
+export async function fetchReviewCurrent(calendar_day: string): Promise<ReviewStartResult> {
+  const params = new URLSearchParams({ calendar_day });
+  return getJson<ReviewStartResult>(`/review/current?${params.toString()}`);
+}
+
 export async function postReviewAnswer(body: {
   session_id: string;
   calendar_day: string;
   choice_index?: number;
   text?: string;
   order_piece_ids?: string[];
+  skip?: boolean;
+  abort?: boolean;
 }): Promise<ReviewAnswerResult> {
   const res = await fetch(`${SIDECAR_BASE}/review/answer`, {
     method: "POST",

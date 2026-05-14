@@ -319,6 +319,8 @@ class ReviewAnswerRequest(BaseModel):
     choice_index: int | None = None
     text: str | None = None
     order_piece_ids: list[str] | None = None
+    skip: bool = False
+    abort: bool = False
 
 
 class ReviewAnswerResponse(BaseModel):
@@ -329,6 +331,10 @@ class ReviewAnswerResponse(BaseModel):
     reading_stage: str = ""
     head_state: dict = Field(default_factory=dict)
     advanced: bool | None = None
+    skipped: bool | None = None
+    skipped_question_id: str = ""
+    aborted: bool | None = None
+    remaining_before_abort: int | None = None
 
 
 class ReviewSnapshotResponse(BaseModel):

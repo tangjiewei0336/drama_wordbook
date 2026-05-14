@@ -80,6 +80,8 @@ from app.services.ocr_service import (
 from app.services.tokenizer_service import tokenize_ja
 from app.services.review_service import evaluate_answer as review_evaluate_answer
 from app.services.review_service import review_snapshot as review_snapshot_service
+from app.services.review_service import current_session as review_current_session
+from app.services.review_service import abort_session as review_abort_session
 from app.services.review_service import start_or_resume_session as review_start_session
 from app.services.vocab_service import (
     _get_conn,
@@ -615,6 +617,15 @@ def review_start_endpoint(payload: ReviewStartRequest):
         conn.close()
 
 
+@app.get("/review/current", response_model=ReviewStartResponse)
+def review_current_endpoint(calendar_day: str):
+    conn = _get_conn()
+    try:
+        return ReviewStartResponse(**review_current_session(conn, calendar_day))
+    finally:
+        conn.close()
+
+
 @app.post("/review/answer", response_model=ReviewAnswerResponse)
 def review_answer_endpoint(payload: ReviewAnswerRequest):
     conn = _get_conn()
@@ -627,12 +638,17 @@ def review_answer_endpoint(payload: ReviewAnswerRequest):
             payload_dict["text"] = ans["text"]
         if ans.get("order_piece_ids") is not None:
             payload_dict["order_piece_ids"] = ans["order_piece_ids"]
-        raw = review_evaluate_answer(
-            conn,
-            session_id=str(ans["session_id"]),
-            calendar_day=str(ans["calendar_day"]),
-            payload=payload_dict,
-        )
+        if ans.get("skip"):
+            payload_dict["skip"] = True
+        if ans.get("abort"):
+            raw = review_abort_session(conn, session_id=str(ans["session_id"]), calendar_day=str(ans["calendar_day"]))
+        else:
+            raw = review_evaluate_answer(
+                conn,
+                session_id=str(ans["session_id"]),
+                calendar_day=str(ans["calendar_day"]),
+                payload=payload_dict,
+            )
         return ReviewAnswerResponse(**raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

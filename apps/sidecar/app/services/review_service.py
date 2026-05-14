@@ -482,6 +482,38 @@ def start_or_resume_session(conn: sqlite3.Connection, calendar_day: str, questio
     }
 
 
+def current_session(conn: sqlite3.Connection, calendar_day: str) -> dict:
+    active = conn.execute(
+        """
+        SELECT * FROM review_session WHERE calendar_day = ? AND completed = 0 ORDER BY updated_at DESC LIMIT 1
+        """,
+        (calendar_day,),
+    ).fetchone()
+    if not active:
+        return {
+            "session_id": "",
+            "resumed": False,
+            "calendar_day": calendar_day,
+            "cursor": 0,
+            "total": 0,
+            "current": None,
+            "completed": True,
+            "empty_reason": "no_active_session",
+        }
+    queue = json.loads(active["queue_json"] or "[]")
+    cursor = int(active["cursor_index"] or 0)
+    current = sanitize_question_for_client(queue[cursor]) if cursor < len(queue) and isinstance(queue[cursor], dict) else None
+    return {
+        "session_id": active["id"],
+        "resumed": True,
+        "calendar_day": calendar_day,
+        "cursor": cursor,
+        "total": len(queue),
+        "current": current,
+        "completed": cursor >= len(queue),
+    }
+
+
 def _load_session(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM review_session WHERE id = ?", (session_id,)).fetchone()
 
@@ -492,6 +524,32 @@ def _save_queue(conn: sqlite3.Connection, session_id: str, cursor: int, queue: l
         (cursor, json.dumps(queue, ensure_ascii=False), _utc_now_iso(), session_id),
     )
     conn.commit()
+
+
+def abort_session(conn: sqlite3.Connection, *, session_id: str, calendar_day: str) -> dict:
+    row = _load_session(conn, session_id)
+    if not row:
+        raise ValueError("session_not_found")
+    if str(row["calendar_day"]) != calendar_day:
+        raise ValueError("calendar_day_mismatch")
+    queue = json.loads(row["queue_json"] or "[]")
+    cursor = int(row["cursor_index"] or 0)
+    conn.execute(
+        "UPDATE review_session SET completed = 1, updated_at = ? WHERE id = ?",
+        (_utc_now_iso(), session_id),
+    )
+    conn.commit()
+    return {
+        "done": True,
+        "correct": False,
+        "aborted": True,
+        "current": None,
+        "hint_reading_after_wrong": False,
+        "reading_stage": "aborted",
+        "head_state": {},
+        "advanced": True,
+        "remaining_before_abort": max(0, len(queue) - cursor),
+    }
 
 
 def evaluate_answer(conn: sqlite3.Connection, *, session_id: str, calendar_day: str, payload: dict) -> dict:
@@ -517,6 +575,32 @@ def evaluate_answer(conn: sqlite3.Connection, *, session_id: str, calendar_day: 
         queue[cursor] = item
     hid = int(item["head_id"])
     mastery_info: dict[str, object] = {}
+
+    if payload.get("skip"):
+        skipped = queue.pop(cursor)
+        if cursor >= len(queue):
+            conn.execute(
+                "UPDATE review_session SET cursor_index = ?, queue_json = ?, completed = 1, updated_at = ? WHERE id = ?",
+                (cursor, json.dumps(queue, ensure_ascii=False), _utc_now_iso(), session_id),
+            )
+            conn.commit()
+            nxt = None
+            done = True
+        else:
+            _save_queue(conn, session_id, cursor, queue)
+            nxt = queue[cursor]
+            done = False
+        return {
+            "done": done,
+            "correct": False,
+            "skipped": True,
+            "skipped_question_id": skipped.get("id") if isinstance(skipped, dict) else "",
+            "current": sanitize_question_for_client(nxt),
+            "hint_reading_after_wrong": False,
+            "reading_stage": "skipped",
+            "head_state": {},
+            "advanced": True,
+        }
 
     if mode == "mc":
         idx = payload.get("choice_index")
