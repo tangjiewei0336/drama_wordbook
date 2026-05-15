@@ -22,6 +22,8 @@ let asrLevelTimer = null;
 let asrVideo = null;
 let asrCaptureId = 0;
 let asrSendChunks = false;
+/** Matches background POC_ASR_START interval_ms (MediaRecorder timeslice). */
+let asrRecordingIntervalMs = 15000;
 const autoWordFeedRecent = new Map();
 
 function parseMeaningsInput(value) {
@@ -204,17 +206,29 @@ function notifyAsrStopped(reason) {
   }).catch(() => {});
 }
 
+function detachAsrVideoElementListeners(video) {
+  if (!video) return;
+  video.removeEventListener("pause", handleAsrVideoPaused);
+  video.removeEventListener("ended", handleAsrVideoEnded);
+  video.removeEventListener("emptied", handleAsrVideoEmptied);
+  video.removeEventListener("play", handleAsrVideoPlay);
+}
+
 function removeAsrVideoListeners() {
-  if (!asrVideo) return;
-  asrVideo.removeEventListener("pause", handleAsrVideoPaused);
-  asrVideo.removeEventListener("ended", handleAsrVideoEnded);
-  asrVideo.removeEventListener("emptied", handleAsrVideoEmptied);
+  detachAsrVideoElementListeners(asrVideo);
   asrVideo = null;
 }
 
+/** Resume MediaRecorder after a buffering pause; background asrRunning stays true. */
+function handleAsrVideoPlay() {
+  if (!asrVideo || asrVideo.paused || asrVideo.ended) return;
+  void startAsrCapture(asrRecordingIntervalMs);
+}
+
 function handleAsrVideoPaused() {
+  // Do not notify background: Bilibili often fires pause during buffering/quality
+  // switches; that would set asrRunning=false and kill all subsequent chunks.
   stopAsrCapture("video_paused");
-  notifyAsrStopped("video_paused");
 }
 
 function handleAsrVideoEnded() {
@@ -599,6 +613,8 @@ async function startAsrCapture(intervalMs = 15000) {
   if (!audioTracks.length) {
     return { ok: false, error: "未检测到音频轨道" };
   }
+  detachAsrVideoElementListeners(asrVideo);
+  detachAsrVideoElementListeners(video);
   const captureId = asrCaptureId + 1;
   asrCaptureId = captureId;
   asrSendChunks = true;
@@ -658,7 +674,7 @@ async function startAsrCapture(intervalMs = 15000) {
   return { ok: true };
 }
 
-function stopAsrCapture(_reason = "manual") {
+function stopAsrCapture(reason = "manual") {
   asrSendChunks = false;
   asrCaptureId += 1;
   try {
@@ -676,11 +692,23 @@ function stopAsrCapture(_reason = "manual") {
   }
   asrAudioContext = null;
   asrAnalyser = null;
-  removeAsrVideoListeners();
   if (asrMediaStream) {
     asrMediaStream.getTracks().forEach((t) => t.stop());
   }
   asrMediaStream = null;
+
+  const resumeOnPlay = reason === "video_paused";
+  if (!resumeOnPlay) {
+    removeAsrVideoListeners();
+    return;
+  }
+  if (asrVideo) {
+    try {
+      asrVideo.addEventListener("play", handleAsrVideoPlay, { once: true });
+    } catch (_e) {
+      // ignore
+    }
+  }
 }
 
 document.addEventListener(
@@ -717,7 +745,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "POC_ASR_CONTROL") {
     if (message.action === "start") {
-      startAsrCapture(Number(message.interval_ms || 60000)).then(sendResponse);
+      asrRecordingIntervalMs = Number(message.interval_ms || 15000);
+      startAsrCapture(asrRecordingIntervalMs).then(sendResponse);
       return true;
     }
     if (message.action === "stop") {
