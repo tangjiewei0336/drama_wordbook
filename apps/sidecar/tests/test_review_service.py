@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.review_service import _sentence_order_matches
+from app.services.review_service import _acceptable_readings_for_ref, _sentence_order_matches
 
 
 class ReviewServiceTest(unittest.TestCase):
@@ -16,6 +16,18 @@ class ReviewServiceTest(unittest.TestCase):
 
         self.assertTrue(_sentence_order_matches(["p1", "p0", "p2"], question))
         self.assertFalse(_sentence_order_matches(["p2", "p0", "p1"], question))
+
+    def test_reading_accepts_suru_dictionary_variant_for_masu_surface(self):
+        variants = _acceptable_readings_for_ref(
+            {
+                "surface": "紹介します",
+                "dictionary_form": "紹介する",
+                "reading": "ショウカイシマス",
+            }
+        )
+
+        self.assertIn("しょうかいします", variants)
+        self.assertIn("しょうかいする", variants)
 
 
 if __name__ == "__main__":

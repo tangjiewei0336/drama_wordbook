@@ -6,6 +6,20 @@ function shortenForUi(text, maxLen = 220) {
   return s.length > maxLen ? `${s.slice(0, maxLen)}…` : s;
 }
 
+/** Sidecar may leave `text` empty while `chunks` carry segments; JLPT filter can yield 0 saved words despite transcript. */
+function mergeAsrTranscript(asr) {
+  if (!asr || typeof asr !== "object") return { text: "", duration: 0, language: "", chunks: [] };
+  let text = String(asr.text ?? "").trim();
+  if (!text && Array.isArray(asr.chunks)) {
+    text = asr.chunks
+      .map((c) => String(c?.text ?? "").trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+  return { ...asr, text };
+}
+
 function formatPipelineFailure(error) {
   return shortenForUi(String(error?.message || error || "未知错误"));
 }
@@ -44,10 +58,16 @@ let lastCaptureResult = null;
 let captureLock = false;
 let captureLockStartedAt = 0;
 let asrRunning = false;
+/** Slice period (ms) for ASR capture; recycle uses the same value as last start. */
+let asrCaptureIntervalMs = 15000;
 /** Serial drain of ASR audio chunks (MediaRecorder emits on a fixed cadence faster than Whisper). */
 let asrChunkQueue = [];
 let asrDrainRunning = false;
 const ASR_CHUNK_QUEUE_CAP = 12;
+/** MV3 service worker may suspend during long /asr/transcribe; persist flag so chunks are not dropped after wake. */
+const ASR_RUNNING_SESSION_KEY = "wordbook_asr_running_v1";
+/** Sidecar Whisper on CPU can exceed minutes per 15s clip; abort so UI does not stick on「识别中」. */
+const ASR_TRANSCRIBE_TIMEOUT_MS = 180_000;
 let recentAsrResults = [];
 let asrAudioLevel = 0;
 let asrAudioLevelUpdatedAt = "";
@@ -479,15 +499,37 @@ async function saveTokensAsVocab({ text, zhText = "", screenshotBase64 = null, p
 }
 
 async function postAsrTranscribe(audioBase64) {
-  const res = await fetchSidecar(`/asr/transcribe`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      audio_base64: audioBase64,
-      language: "ja",
-      with_vad: true
-    })
-  });
+  const { sidecarBaseUrl } = await getSettings();
+  const url = `${sidecarBaseUrl}/asr/transcribe`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ASR_TRANSCRIBE_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audio_base64: audioBase64,
+        language: "ja",
+        with_vad: true
+      }),
+      signal: controller.signal
+    });
+  } catch (error) {
+    const aborted = controller.signal.aborted || String(error?.name || "") === "AbortError";
+    if (aborted) {
+      throw new Error(
+        `语音识别超时（>${Math.round(ASR_TRANSCRIBE_TIMEOUT_MS / 1000)}s）。Sidecar 仍在跑 Whisper 或卡住；可在桌面端运行中心查看 ASR 日志，或把环境变量 ASR_MODEL_SIZE 改为 base/tiny 后再试。`
+      );
+    }
+    const cause = error?.cause && typeof error?.cause === "object" && error?.cause?.message;
+    const detail = cause || String(error?.message || error);
+    throw new Error(
+      `无法连接 Sidecar（${sidecarBaseUrl}）：${detail}。若桌面端显示已启动，请在浏览器打开 ${sidecarBaseUrl}/health 检查服务是否响应。`
+    );
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`asr/transcribe failed: ${res.status} ${text}`);
@@ -495,24 +537,67 @@ async function postAsrTranscribe(audioBase64) {
   return res.json();
 }
 
+async function persistAsrRunningSession(running) {
+  try {
+    await chrome.storage.session.set({ [ASR_RUNNING_SESSION_KEY]: Boolean(running) });
+  } catch {
+    // ignore (session API unavailable)
+  }
+}
+
+/** If the worker was restarted mid-ASR, restore in-memory flag from session storage. */
+async function refreshAsrRunningFromSession() {
+  try {
+    const data = await chrome.storage.session.get(ASR_RUNNING_SESSION_KEY);
+    if (data[ASR_RUNNING_SESSION_KEY] === true) {
+      asrRunning = true;
+    }
+  } catch {
+    // ignore
+  }
+}
+
 function stopAsrState(reason = "") {
   asrRunning = false;
+  void persistAsrRunningSession(false);
   asrChunkQueue.length = 0;
   asrAudioLevel = 0;
   asrAudioLevelUpdatedAt = new Date().toISOString();
   return reason;
 }
 
+/** After each Sidecar transcribe, reset page capture like user toggled ASR off/on (keeps background asrRunning + queue). */
+async function notifyContentAsrCycleCapture() {
+  if (!asrRunning) return;
+  try {
+    const tab = await getActiveBilibiliTab();
+    await chrome.tabs.sendMessage(tab.id, {
+      type: "POC_ASR_CONTROL",
+      action: "recycle",
+      interval_ms: asrCaptureIntervalMs
+    });
+  } catch (error) {
+    console.warn("[wordbook] ASR cycle capture notify failed", error);
+  }
+}
+
 async function drainAsrChunks() {
+  await refreshAsrRunningFromSession();
   if (!asrRunning || asrDrainRunning) return;
   asrDrainRunning = true;
+  let postedListeningThisDrain = false;
   try {
     while (asrRunning && asrChunkQueue.length) {
+      await refreshAsrRunningFromSession();
+      if (!asrRunning) break;
       const audioBase64 = asrChunkQueue.shift();
       if (!audioBase64 || audioBase64.length < 500) continue;
       try {
-        const asr = await postAsrTranscribe(String(audioBase64));
-        if (asr?.text) {
+        await broadcastStatus("processing", "Sidecar Whisper 转写中（CPU 上可能要几十秒）…");
+        const rawAsr = await postAsrTranscribe(String(audioBase64));
+        const asr = mergeAsrTranscript(rawAsr);
+        const transcript = String(asr.text || "").trim();
+        if (transcript) {
           let savedCount = 0;
           try {
             const tab = await getActiveBilibiliTab();
@@ -520,7 +605,7 @@ async function drainAsrChunks() {
             const frameDataUrl = await captureVideoFrameDataUrl(tab.id);
             const allowedJlptLevels = await getAutoJlptLevels();
             const { words } = await saveTokensAsVocab({
-              text: asr.text,
+              text: transcript,
               screenshotBase64: frameDataUrl ? dataUrlToBase64(frameDataUrl) : null,
               playback: playbackRes.playback,
               allowedJlptLevels
@@ -530,22 +615,46 @@ async function drainAsrChunks() {
             console.warn("[wordbook] ASR auto-save failed", error);
           }
           recentAsrResults.unshift({
-            text: asr.text,
+            text: transcript,
             created_at: new Date().toISOString(),
             duration: asr.duration,
             saved_count: savedCount
           });
           recentAsrResults = recentAsrResults.slice(0, 20);
-          await broadcastStatus("processing", `ASR 自动记录 ${savedCount} 个词`);
+          if (asrRunning) {
+            const excerpt = shortenForUi(transcript, 72);
+            await broadcastStatus(
+              "listening",
+              savedCount
+                ? `已记录 ${savedCount} 个词 · ${excerpt}`
+                : `已识别到文字但未入库（多为 JLPT 筛选或分词未命中）· ${excerpt}`
+            );
+            postedListeningThisDrain = true;
+          }
+        } else if (asrRunning) {
+          await broadcastStatus("listening", "本段无文本（音频过短、无声，或仍无法识别），继续监听");
+          postedListeningThisDrain = true;
         }
       } catch (error) {
-        await broadcastStatus("error", "语音识别失败");
+        const msg = formatPipelineFailure(error);
         console.warn("[wordbook] ASR transcribe failed", error);
+        await broadcastStatus("error", msg ? `语音识别失败：${msg}` : "语音识别失败");
+        if (asrRunning) {
+          await broadcastStatus("listening", "继续监听下一段（上一段未成功）");
+          postedListeningThisDrain = true;
+        }
       }
+      await notifyContentAsrCycleCapture();
     }
   } finally {
     asrDrainRunning = false;
     if (asrRunning && asrChunkQueue.length) void drainAsrChunks();
+    else if (asrRunning) {
+      await refreshAsrRunningFromSession();
+      if (asrRunning && !postedListeningThisDrain) {
+        await broadcastStatus("listening", "语音识别监听中（15秒分片）");
+      }
+    }
   }
 }
 
@@ -1205,6 +1314,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "POC_GET_MODES") {
+      await refreshAsrRunningFromSession();
       sendResponse({
         ok: true,
         auto_subtitle_running: autoSubtitleRunning,
@@ -1234,11 +1344,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "POC_ASR_START") {
+      asrCaptureIntervalMs = Number(message?.interval_ms ?? 15000) || 15000;
       const tab = await getActiveBilibiliTab();
       const res = await chrome.tabs.sendMessage(tab.id, {
         type: "POC_ASR_CONTROL",
         action: "start",
-        interval_ms: 15000
+        interval_ms: asrCaptureIntervalMs
       });
       if (!res?.ok) {
         stopAsrState();
@@ -1248,7 +1359,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       asrRunning = Boolean(res?.ok);
       asrAudioLevel = 0;
       asrAudioLevelUpdatedAt = new Date().toISOString();
-      await broadcastStatus("processing", "语音识别运行中（15秒分片）");
+      await persistAsrRunningSession(true);
+      await broadcastStatus("listening", "语音识别监听中（15秒分片）");
       sendResponse({ ok: true, running: asrRunning });
       return;
     }
@@ -1267,6 +1379,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "POC_ASR_AUDIO_CHUNK") {
+      await refreshAsrRunningFromSession();
       if (!asrRunning) {
         sendResponse({ ok: true, skipped: true });
         return;
@@ -1286,6 +1399,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "POC_ASR_GET_RESULTS") {
+      await refreshAsrRunningFromSession();
       sendResponse({
         ok: true,
         running: asrRunning,
@@ -1297,6 +1411,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "POC_ASR_LEVEL") {
+      await refreshAsrRunningFromSession();
       if (!asrRunning) {
         sendResponse({ ok: true, skipped: true });
         return;

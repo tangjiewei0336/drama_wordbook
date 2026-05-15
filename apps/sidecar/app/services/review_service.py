@@ -8,6 +8,7 @@ import json
 import random
 import re
 import sqlite3
+import threading
 import unicodedata
 from datetime import timezone
 from datetime import datetime as dt
@@ -21,6 +22,15 @@ from app.services.vocab_service import _get_conn, get_head_items
 Kanji_Re = re.compile(r"[\u3400-\u9fff\uF900-\uFAFF]")
 
 Mode = Literal["mc", "reading", "sentence"]
+
+_build_progress_lock = threading.Lock()
+_build_progress: dict[str, object] = {
+    "state": "idle",
+    "current": 0,
+    "total": 0,
+    "percent": 0,
+    "message": "",
+}
 
 
 def init_review_tables(conn: sqlite3.Connection) -> None:
@@ -66,6 +76,7 @@ def sanitize_question_for_client(q: dict | None) -> dict | None:
     out = dict(q)
     if out.get("mode") == "reading" and not out.get("mistake_seen"):
         out.pop("expected_normalized", None)
+        out.pop("acceptable_normalized", None)
     return out
 
 
@@ -89,6 +100,42 @@ def _normalize_reading(answer: str) -> str:
         else:
             out.append(ch)
     return "".join(out).lower()
+
+
+def _reading_from_text(text: str) -> str:
+    toks = tokenize_ja((text or "").strip(), include_stop=True)
+    readings = [str(t.get("reading") or t.get("surface") or "") for t in toks or []]
+    return _normalize_reading("".join(readings))
+
+
+def _reading_variants(reading: str) -> list[str]:
+    base = _normalize_reading(reading)
+    variants = [base] if base else []
+    suffix_pairs = (
+        ("します", "する"),
+        ("しました", "した"),
+        ("しません", "しない"),
+        ("しています", "している"),
+        ("してます", "してる"),
+    )
+    for src, dst in suffix_pairs:
+        if base.endswith(src):
+            variants.append(f"{base[:-len(src)]}{dst}")
+    for src, dst in suffix_pairs:
+        if base.endswith(dst):
+            variants.append(f"{base[:-len(dst)]}{src}")
+    return list(dict.fromkeys(v for v in variants if v))
+
+
+def _acceptable_readings_for_ref(ref: dict) -> list[str]:
+    candidates: list[str] = []
+    for raw in (
+        str((ref or {}).get("reading") or ""),
+        _reading_from_text(str((ref or {}).get("surface") or "")),
+        _reading_from_text(str((ref or {}).get("dictionary_form") or "")),
+    ):
+        candidates.extend(_reading_variants(raw))
+    return list(dict.fromkeys(c for c in candidates if c))
 
 
 def _expected_reading_script(reading: str) -> Literal["hiragana", "katakana", "mixed"]:
@@ -212,6 +259,8 @@ def _capabilities_for_head(conn: sqlite3.Connection, head_id: int) -> dict:
         FROM vocab_item i
         INNER JOIN sentence s ON s.id = i.sentence_id
         WHERE i.head_id = ? AND TRIM(IFNULL(s.example_ja, '')) != ''
+          AND IFNULL(i.source, '') != 'auto'
+          AND IFNULL(s.source, '') != 'auto'
         LIMIT 24
         """,
         (head_id,),
@@ -276,12 +325,14 @@ def _build_question_payload(conn: sqlite3.Connection, *, head_id: int, mode: Mod
     if use == "reading":
         prompt = str(ref.get("surface") or ref.get("dictionary_form") or "")
         reading = str(ref.get("reading") or "")
+        acceptable = _acceptable_readings_for_ref(ref)
         return {
             "id": qid,
             "head_id": head_id,
             "mode": "reading",
             "prompt_surface": prompt,
-            "expected_normalized": _normalize_reading(reading),
+            "expected_normalized": acceptable[0] if acceptable else _normalize_reading(reading),
+            "acceptable_normalized": acceptable,
             "reading_script_hint": _expected_reading_script(reading),
             "tts_text": prompt or reading,
             "mistake_seen": False,
@@ -448,11 +499,14 @@ def start_or_resume_session(conn: sqlite3.Connection, calendar_day: str, questio
     random.shuffle(heads)
     pick = heads[: min(len(heads), lim)]
     queue: list[dict] = []
-    for hid in pick:
+    _set_build_progress("building", 0, len(pick), "正在分析词条并组卷")
+    for idx, hid in enumerate(pick, start=1):
         q = _build_question_payload(conn, head_id=hid)
         if q:
             queue.append(q)
+        _set_build_progress("building", idx, len(pick), f"已处理 {idx}/{len(pick)} 个词头")
     if not queue:
+        _set_build_progress("done", len(pick), len(pick), "没有可组卷题目")
         return {
             "session_id": "",
             "resumed": False,
@@ -481,6 +535,7 @@ def start_or_resume_session(conn: sqlite3.Connection, calendar_day: str, questio
         ),
     )
     conn.commit()
+    _set_build_progress("done", len(pick), len(pick), f"已生成 {len(queue)} 道题")
     raw_q = queue[0] if queue else None
     current = sanitize_question_for_client(raw_q) if isinstance(raw_q, dict) else None
     return {
@@ -659,7 +714,8 @@ def evaluate_answer(conn: sqlite3.Connection, *, session_id: str, calendar_day: 
 
     if mode == "reading":
         guessed = payload.get("text", "")
-        ok = _normalize_reading(str(guessed)) == item.get("expected_normalized")
+        acceptable = item.get("acceptable_normalized") or [item.get("expected_normalized")]
+        ok = _normalize_reading(str(guessed)) in {str(x) for x in acceptable if x}
         if ok:
             mastery_info = _record_daily_correct(conn, hid, calendar_day)
             cursor += 1
@@ -782,3 +838,22 @@ def review_snapshot() -> dict:
         return {"eligible_heads": heads, "mastered_heads": mast}
     finally:
         conn.close()
+
+
+def _set_build_progress(state: str, current: int, total: int, message: str) -> None:
+    percent = 100 if total <= 0 and state == "done" else int(min(100, max(0, current) * 100 / max(1, total)))
+    with _build_progress_lock:
+        _build_progress.update(
+            {
+                "state": state,
+                "current": max(0, current),
+                "total": max(0, total),
+                "percent": percent,
+                "message": message,
+            }
+        )
+
+
+def review_build_progress() -> dict:
+    with _build_progress_lock:
+        return dict(_build_progress)

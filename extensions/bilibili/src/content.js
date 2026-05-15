@@ -19,9 +19,19 @@ let asrMediaStream = null;
 let asrAudioContext = null;
 let asrAnalyser = null;
 let asrLevelTimer = null;
+/** When set, periodically calls MediaRecorder.requestData() (avoids Chromium timeslice + captureStream stopping after one slice). */
+let asrSliceTimer = null;
+/** If no chunk reaches the extension background for too long, restart capture. */
+let asrWatchdogTimer = null;
+/** Last time background accepted a POC_ASR_AUDIO_CHUNK (0 = none yet this session). */
+let asrLastChunkAcceptedAt = 0;
+let asrSessionStartedAt = 0;
+let asrRestartCooldownUntil = 0;
 let asrVideo = null;
 let asrCaptureId = 0;
 let asrSendChunks = false;
+/** Matches background POC_ASR_START interval_ms (slice period for ASR chunks). */
+let asrRecordingIntervalMs = 15000;
 const autoWordFeedRecent = new Map();
 
 function parseMeaningsInput(value) {
@@ -204,17 +214,43 @@ function notifyAsrStopped(reason) {
   }).catch(() => {});
 }
 
+function detachAsrVideoElementListeners(video) {
+  if (!video) return;
+  video.removeEventListener("pause", handleAsrVideoPaused);
+  video.removeEventListener("ended", handleAsrVideoEnded);
+  video.removeEventListener("emptied", handleAsrVideoEmptied);
+  video.removeEventListener("play", handleAsrVideoPlay);
+}
+
 function removeAsrVideoListeners() {
-  if (!asrVideo) return;
-  asrVideo.removeEventListener("pause", handleAsrVideoPaused);
-  asrVideo.removeEventListener("ended", handleAsrVideoEnded);
-  asrVideo.removeEventListener("emptied", handleAsrVideoEmptied);
+  detachAsrVideoElementListeners(asrVideo);
   asrVideo = null;
 }
 
+function clearAsrSliceTimer() {
+  if (asrSliceTimer != null) {
+    window.clearInterval(asrSliceTimer);
+    asrSliceTimer = null;
+  }
+}
+
+function clearAsrWatchdog() {
+  if (asrWatchdogTimer != null) {
+    window.clearInterval(asrWatchdogTimer);
+    asrWatchdogTimer = null;
+  }
+}
+
+/** Resume MediaRecorder after a buffering pause; background asrRunning stays true. */
+function handleAsrVideoPlay() {
+  if (!asrVideo || asrVideo.paused || asrVideo.ended) return;
+  void startAsrCapture(asrRecordingIntervalMs);
+}
+
 function handleAsrVideoPaused() {
+  // Do not notify background: Bilibili often fires pause during buffering/quality
+  // switches; that would set asrRunning=false and kill all subsequent chunks.
   stopAsrCapture("video_paused");
-  notifyAsrStopped("video_paused");
 }
 
 function handleAsrVideoEnded() {
@@ -316,12 +352,20 @@ function ensureStatusBadge() {
 function setStatusBadge(status, message) {
   const badge = ensureStatusBadge();
   const statusText =
-    status === "processing" ? "处理中" : status === "error" ? "错误" : "空闲";
+    status === "processing"
+      ? "处理中"
+      : status === "listening"
+        ? "监听中"
+        : status === "error"
+          ? "错误"
+          : "空闲";
   badge.textContent = `UNI：${statusText}${message ? ` · ${message}` : ""}`;
   if (status === "error") {
     badge.style.background = "rgba(185,28,28,0.74)";
   } else if (status === "processing") {
     badge.style.background = "rgba(29,78,216,0.72)";
+  } else if (status === "listening") {
+    badge.style.background = "rgba(5,118,90,0.72)";
   } else {
     badge.style.background = "rgba(17,24,39,0.62)";
   }
@@ -599,9 +643,13 @@ async function startAsrCapture(intervalMs = 15000) {
   if (!audioTracks.length) {
     return { ok: false, error: "未检测到音频轨道" };
   }
+  detachAsrVideoElementListeners(asrVideo);
+  detachAsrVideoElementListeners(video);
   const captureId = asrCaptureId + 1;
   asrCaptureId = captureId;
   asrSendChunks = true;
+  asrSessionStartedAt = Date.now();
+  asrLastChunkAcceptedAt = 0;
   asrVideo = video;
   asrVideo.addEventListener("pause", handleAsrVideoPaused);
   asrVideo.addEventListener("ended", handleAsrVideoEnded);
@@ -641,24 +689,103 @@ async function startAsrCapture(intervalMs = 15000) {
   asrRecorder.ondataavailable = async (event) => {
     try {
       if (captureId !== asrCaptureId || !asrSendChunks) return;
+      const live = document.querySelector("video");
+      if (live && live !== asrVideo && !live.paused && !live.ended) {
+        stopAsrCapture("recorder_restart");
+        return;
+      }
       if (!asrVideo || asrVideo.paused || asrVideo.ended) return;
-      if (!event.data || event.data.size < 1024) return;
+      if (!event.data || event.data.size < 256) return;
       const audioBase64 = await blobToBase64(event.data);
       if (captureId !== asrCaptureId || !asrSendChunks) return;
-      await chrome.runtime.sendMessage({
+      const res = await chrome.runtime.sendMessage({
         type: "POC_ASR_AUDIO_CHUNK",
         audio_base64: audioBase64,
         mime_type: event.data.type || preferred
       });
+      if (res?.skipped) {
+        console.warn("[wordbook] ASR chunk rejected by background (session not running?)", res);
+        return;
+      }
+      if (res?.ok && res?.queued) {
+        asrLastChunkAcceptedAt = Date.now();
+      }
     } catch (_error) {
       // ignore chunk failure
     }
   };
-  asrRecorder.start(intervalMs);
+  // Chromium + captureStream(): recorder often ends after the first slice; restart without user toggling ASR.
+  // Defer handling so an in-flight ondataavailable (async blobToBase64) can finish before captureId bumps.
+  asrRecorder.onstop = () => {
+    window.setTimeout(() => {
+      try {
+        if (captureId !== asrCaptureId || !asrSendChunks) return;
+        const v = document.querySelector("video");
+        if (!v || v.paused || v.ended) return;
+        stopAsrCapture("recorder_restart");
+      } catch (_e) {
+        // ignore
+      }
+    }, 160);
+  };
+
+  const canRequestSlices =
+    typeof MediaRecorder !== "undefined" &&
+    typeof MediaRecorder.prototype.requestData === "function";
+
+  if (canRequestSlices) {
+    clearAsrSliceTimer();
+    asrRecorder.start();
+    asrSliceTimer = window.setInterval(() => {
+      try {
+        if (captureId !== asrCaptureId || !asrSendChunks) return;
+        if (!asrRecorder) return;
+        if (asrRecorder.state !== "recording") {
+          const v = document.querySelector("video");
+          if (v && !v.paused && !v.ended) {
+            stopAsrCapture("recorder_restart");
+          }
+          return;
+        }
+        asrRecorder.requestData();
+      } catch {
+        // ignore
+      }
+    }, intervalMs);
+  } else {
+    asrRecorder.start(intervalMs);
+  }
+
+  clearAsrWatchdog();
+  asrWatchdogTimer = window.setInterval(() => {
+    try {
+      if (captureId !== asrCaptureId || !asrSendChunks) return;
+      if (!asrVideo || asrVideo.paused || asrVideo.ended) return;
+      const now = Date.now();
+      if (now < asrRestartCooldownUntil) return;
+      const anchor = asrLastChunkAcceptedAt > 0 ? asrLastChunkAcceptedAt : asrSessionStartedAt;
+      const allowed =
+        asrLastChunkAcceptedAt > 0
+          ? asrRecordingIntervalMs * 2 + 12000
+          : asrRecordingIntervalMs + 22000;
+      if (now - anchor > allowed) {
+        console.warn("[wordbook] ASR watchdog: no chunk accepted by background; restarting capture");
+        asrRestartCooldownUntil = now + 4000;
+        stopAsrCapture("recorder_restart");
+      }
+    } catch (_e) {
+      // ignore
+    }
+  }, 4000);
+
   return { ok: true };
 }
 
-function stopAsrCapture(_reason = "manual") {
+function stopAsrCapture(reason = "manual") {
+  const resumeOnPlay = reason === "video_paused";
+  const restartRecorder = reason === "recorder_restart";
+  clearAsrSliceTimer();
+  clearAsrWatchdog();
   asrSendChunks = false;
   asrCaptureId += 1;
   try {
@@ -676,11 +803,31 @@ function stopAsrCapture(_reason = "manual") {
   }
   asrAudioContext = null;
   asrAnalyser = null;
-  removeAsrVideoListeners();
   if (asrMediaStream) {
     asrMediaStream.getTracks().forEach((t) => t.stop());
   }
   asrMediaStream = null;
+
+  if (restartRecorder) {
+    const v = document.querySelector("video");
+    if (v && !v.paused && !v.ended) {
+      window.setTimeout(() => {
+        void startAsrCapture(asrRecordingIntervalMs);
+      }, 40);
+    }
+    return;
+  }
+  if (!resumeOnPlay) {
+    removeAsrVideoListeners();
+    return;
+  }
+  if (asrVideo) {
+    try {
+      asrVideo.addEventListener("play", handleAsrVideoPlay, { once: true });
+    } catch (_e) {
+      // ignore
+    }
+  }
 }
 
 document.addEventListener(
@@ -717,12 +864,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "POC_ASR_CONTROL") {
     if (message.action === "start") {
-      startAsrCapture(Number(message.interval_ms || 60000)).then(sendResponse);
+      asrRecordingIntervalMs = Number(message.interval_ms || 15000);
+      startAsrCapture(asrRecordingIntervalMs).then(sendResponse);
       return true;
     }
     if (message.action === "stop") {
       stopAsrCapture();
       sendResponse({ ok: true });
+      return true;
+    }
+    if (message.action === "recycle") {
+      const ms = Number(message.interval_ms || 15000);
+      if (!asrSendChunks) {
+        sendResponse({ ok: true, skipped: true });
+        return true;
+      }
+      stopAsrCapture("manual");
+      startAsrCapture(ms).then(sendResponse);
       return true;
     }
   }

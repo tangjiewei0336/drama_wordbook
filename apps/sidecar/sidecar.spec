@@ -183,6 +183,7 @@ datas += _safe_collect_data_files("skimage")
 # so we must bundle them as data even though Cython itself is mostly .py.
 datas += _safe_collect_data_files("Cython", include_py_files=True)
 datas += _safe_collect_data_files("reportlab", include_py_files=True)
+datas += _safe_collect_data_files("faster_whisper", include_py_files=True)
 # PaddleX checks extras with importlib.metadata at runtime. In frozen builds,
 # these *.dist-info directories are not guaranteed to be present unless copied
 # explicitly; without them, paddlex.utils.deps reports that `OCR` dependencies
@@ -197,6 +198,7 @@ for _metadata_dist in (
     "pypdfium2",
     "python-bidi",
     "shapely",
+    "faster-whisper",
 ):
     datas += _safe_copy_metadata(_metadata_dist)
 datas += [("app/data/jlpt/all.csv", "app/data/jlpt")]

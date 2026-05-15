@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import importlib.util
 import logging
 import os
+import shutil
 import tempfile
 import threading
+import time
 import traceback
+import urllib.request
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -27,6 +31,13 @@ ASR_MODEL_DOWNLOAD_ROOT = os.getenv("ASR_MODEL_DOWNLOAD_ROOT", "")
 ASR_LOCAL_FILES_ONLY = os.getenv("ASR_LOCAL_FILES_ONLY", "0") == "1"
 ASR_HF_ENDPOINT = os.getenv("ASR_HF_ENDPOINT", "https://hf-mirror.com").strip()
 ASR_HF_MIRROR_ENABLED = os.getenv("ASR_HF_MIRROR_ENABLED", "1") != "0"
+ASR_VAD_ASSET_URL = os.getenv(
+    "ASR_VAD_ASSET_URL",
+    "https://raw.githubusercontent.com/SYSTRAN/faster-whisper/master/faster_whisper/assets/silero_vad_v6.onnx",
+).strip()
+# Live ASR: higher beam/best_of improves accuracy on CPU; override for latency (e.g. ASR_DECODE_BEAM_SIZE=2).
+ASR_DECODE_BEAM_SIZE = max(1, int(os.getenv("ASR_DECODE_BEAM_SIZE", "5")))
+ASR_DECODE_BEST_OF = max(1, int(os.getenv("ASR_DECODE_BEST_OF", "5")))
 ASR_MODEL_TOTAL_BYTES = {
     "tiny": 78_200_000,
     "base": 147_900_000,
@@ -34,6 +45,7 @@ ASR_MODEL_TOTAL_BYTES = {
     "medium": 1_530_600_000,
     "large-v3": 3_090_800_000,
 }
+VAD_ASSET_FILENAME = "silero_vad_v6.onnx"
 _model_load_lock = threading.Lock()
 _model_load_state = {
     "state": "idle",
@@ -71,6 +83,100 @@ def _is_audio_decode_error(exc: Exception) -> bool:
         or exc_name in {"InvalidDataError", "EOFError"}
         or "Invalid data found when processing input" in message
     )
+
+
+def _is_missing_vad_model_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "silero_vad" in message and ("NO_SUCHFILE" in message or "File doesn't exist" in message)
+
+
+def _faster_whisper_package_dir() -> Path | None:
+    spec = importlib.util.find_spec("faster_whisper")
+    if spec is None or not spec.origin:
+        return None
+    return Path(spec.origin).resolve().parent
+
+
+def _package_vad_asset_path() -> Path | None:
+    package_dir = _faster_whisper_package_dir()
+    if package_dir is None:
+        return None
+    return package_dir / "assets" / VAD_ASSET_FILENAME
+
+
+def _repair_vad_asset_path() -> Path:
+    root = Path(
+        os.getenv("ASR_MODEL_DOWNLOAD_ROOT")
+        or os.getenv("DRAMA_WORDBOOK_DATA_DIR")
+        or "~/Library/Application Support/UNI/sidecar-data"
+    ).expanduser()
+    return root / "faster_whisper_assets" / VAD_ASSET_FILENAME
+
+
+def _patch_vad_asset_path(asset_path: Path) -> None:
+    if not asset_path.exists():
+        return
+    try:
+        import faster_whisper.vad as vad
+
+        vad.get_vad_model.cache_clear()
+        vad.get_assets_path = lambda: str(asset_path.parent)
+    except Exception:
+        logger.exception("failed to patch faster-whisper VAD asset path")
+
+
+def _ensure_vad_asset_path() -> Path | None:
+    package_path = _package_vad_asset_path()
+    if package_path and package_path.exists():
+        return package_path
+    repair_path = _repair_vad_asset_path()
+    if repair_path.exists():
+        _patch_vad_asset_path(repair_path)
+        return repair_path
+    return None
+
+
+def _vad_asset_status() -> dict:
+    package_path = _package_vad_asset_path()
+    repair_path = _repair_vad_asset_path()
+    ready_path = _ensure_vad_asset_path()
+    return {
+        "ready": ready_path is not None,
+        "package_path": str(package_path or ""),
+        "repair_path": str(repair_path),
+        "using_fallback": bool(ready_path and ready_path == repair_path and package_path != repair_path),
+        "error": "" if ready_path else f"{VAD_ASSET_FILENAME} 缺失",
+    }
+
+
+def repair_asr_vad_asset() -> dict:
+    package_path = _package_vad_asset_path()
+    repair_path = _repair_vad_asset_path()
+    repair_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if package_path and package_path.exists():
+        if package_path != repair_path:
+            shutil.copy2(package_path, repair_path)
+        _patch_vad_asset_path(repair_path)
+        return get_asr_status()
+
+    if not ASR_VAD_ASSET_URL:
+        raise RuntimeError("ASR_VAD_ASSET_URL is empty; cannot repair VAD asset")
+
+    temp_path = repair_path.with_suffix(".download")
+    try:
+        logger.warning("downloading ASR VAD asset from %s", ASR_VAD_ASSET_URL)
+        urllib.request.urlretrieve(ASR_VAD_ASSET_URL, temp_path)
+        if temp_path.stat().st_size < 100_000:
+            raise RuntimeError("downloaded VAD asset is unexpectedly small")
+        temp_path.replace(repair_path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    _patch_vad_asset_path(repair_path)
+    return get_asr_status()
 
 
 def _utc_now() -> str:
@@ -140,6 +246,7 @@ def get_asr_model():
         )
     logger.warning("loading ASR model size=%s compute=%s", ASR_MODEL_SIZE, ASR_COMPUTE_TYPE)
     _configure_hf_endpoint()
+    _ensure_vad_asset_path()
     # First load may download model weights.
     return WhisperModel(
         ASR_MODEL_SIZE,
@@ -237,6 +344,7 @@ def get_asr_status() -> dict:
         "hf_mirror_enabled": ASR_HF_MIRROR_ENABLED,
         "load_state": load_state,
         "download_progress": progress,
+        "vad_asset": _vad_asset_status(),
     }
 
 
@@ -252,6 +360,7 @@ def transcribe_audio_chunk(
         logger.info("ASR skipped tiny audio payload: %s bytes", len(audio_bytes))
         return _empty_transcript(language)
     model = get_asr_model()
+    t0 = time.perf_counter()
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
         f.write(audio_bytes)
         temp_path = Path(f.name)
@@ -266,8 +375,8 @@ def transcribe_audio_chunk(
                     "min_silence_duration_ms": 450,
                     "speech_pad_ms": 160,
                 },
-                beam_size=5,
-                best_of=5,
+                beam_size=ASR_DECODE_BEAM_SIZE,
+                best_of=ASR_DECODE_BEST_OF,
                 temperature=0,
                 condition_on_previous_text=False,
             )
@@ -275,7 +384,19 @@ def transcribe_audio_chunk(
             if _is_audio_decode_error(exc):
                 logger.info("ASR skipped undecodable audio chunk: %s", exc)
                 return _empty_transcript(language)
-            raise
+            if with_vad and _is_missing_vad_model_error(exc):
+                logger.warning("ASR VAD model missing; retrying transcription without VAD: %s", exc)
+                segments, info = model.transcribe(
+                    str(temp_path),
+                    language=language,
+                    vad_filter=False,
+                    beam_size=ASR_DECODE_BEAM_SIZE,
+                    best_of=ASR_DECODE_BEST_OF,
+                    temperature=0,
+                    condition_on_previous_text=False,
+                )
+            else:
+                raise
         texts: list[str] = []
         chunks: list[dict] = []
         for seg in segments:
@@ -290,12 +411,55 @@ def transcribe_audio_chunk(
                     "text": txt,
                 }
             )
-        return {
+        out = {
             "language": str(info.language or language),
             "duration": float(getattr(info, "duration", 0.0) or 0.0),
             "text": " ".join(texts).strip(),
             "chunks": chunks,
         }
+        # Bilibili / browser capture: VAD often drops whole clips as "non-speech" while Whisper still hears Japanese.
+        if with_vad and not out["text"] and len(audio_bytes) >= 3000:
+            logger.info(
+                "ASR empty with VAD; retrying without VAD (audio_bytes=%s)",
+                len(audio_bytes),
+            )
+            segments2, info2 = model.transcribe(
+                str(temp_path),
+                language=language,
+                vad_filter=False,
+                beam_size=ASR_DECODE_BEAM_SIZE,
+                best_of=ASR_DECODE_BEST_OF,
+                temperature=0,
+                condition_on_previous_text=False,
+            )
+            texts2: list[str] = []
+            chunks2: list[dict] = []
+            for seg in segments2:
+                txt = (seg.text or "").strip()
+                if not txt:
+                    continue
+                texts2.append(txt)
+                chunks2.append(
+                    {
+                        "start": float(seg.start),
+                        "end": float(seg.end),
+                        "text": txt,
+                    }
+                )
+            out = {
+                "language": str(info2.language or language),
+                "duration": float(getattr(info2, "duration", 0.0) or 0.0),
+                "text": " ".join(texts2).strip(),
+                "chunks": chunks2,
+            }
+        logger.info(
+            "ASR transcribe done in %.1fs (audio_bytes=%s, text_len=%s, beam=%s)",
+            time.perf_counter() - t0,
+            len(audio_bytes),
+            len(out["text"]),
+            ASR_DECODE_BEAM_SIZE,
+        )
+        return out
     finally:
         try:
             temp_path.unlink(missing_ok=True)

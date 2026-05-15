@@ -36,6 +36,7 @@ from app.models.schemas import (
     Profile,
     ReviewAnswerRequest,
     ReviewAnswerResponse,
+    ReviewBuildProgressResponse,
     ReviewSnapshotResponse,
     ReviewStartRequest,
     ReviewStartResponse,
@@ -68,6 +69,7 @@ from app.services.export_service import (
 from app.services.asr_service import (
     get_asr_status,
     preload_asr_model,
+    repair_asr_vad_asset,
     set_hf_mirror_enabled,
     start_asr_model_load,
     transcribe_audio_chunk,
@@ -84,6 +86,7 @@ from app.services.ocr_service import (
 from app.services.ocr_correction_service import correct_ocr_lines_with_glm
 from app.services.tokenizer_service import tokenize_ja
 from app.services.review_service import evaluate_answer as review_evaluate_answer
+from app.services.review_service import review_build_progress as review_build_progress_service
 from app.services.review_service import review_snapshot as review_snapshot_service
 from app.services.review_service import current_session as review_current_session
 from app.services.review_service import abort_session as review_abort_session
@@ -646,6 +649,12 @@ def asr_model_load():
     return start_asr_model_load()
 
 
+@app.post("/asr/model/repair")
+def asr_model_repair():
+    set_hf_mirror_enabled(get_asr_settings().get("hf_mirror_enabled", True))
+    return repair_asr_vad_asset()
+
+
 @app.get("/asr/settings", response_model=AsrSettings)
 def asr_settings_get():
     return AsrSettings(**get_asr_settings())
@@ -709,3 +718,8 @@ def review_answer_endpoint(payload: ReviewAnswerRequest):
 @app.get("/review/snapshot", response_model=ReviewSnapshotResponse)
 def review_snapshot_endpoint():
     return ReviewSnapshotResponse(**review_snapshot_service())
+
+
+@app.get("/review/build-progress", response_model=ReviewBuildProgressResponse)
+def review_build_progress_endpoint():
+    return ReviewBuildProgressResponse(**review_build_progress_service())
