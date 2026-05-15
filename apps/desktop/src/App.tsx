@@ -35,6 +35,7 @@ import uniLogo from "./assets/uni-logo.png";
 import {
   fetchAsrStatus,
   fetchOcrStatus,
+  repairAsrModel,
   deletePlayerGroup,
   deleteVocabItem,
   deleteSentence,
@@ -467,6 +468,9 @@ export default function App() {
   const [spaceError, setSpaceError] = useState("");
   const [libraryError, setLibraryError] = useState("");
   const [profileError, setProfileError] = useState("");
+  const [toast, setToast] = useState<{ kind: "info" | "warning" | "error" | "success"; message: string } | null>(null);
+  const sidecarStartingToastRef = useRef(false);
+  const asrVadToastRef = useRef(false);
   const [exportExcelBusy, setExportExcelBusy] = useState(false);
   const [exportPdfBusy, setExportPdfBusy] = useState(false);
   const [exportExcelError, setExportExcelError] = useState("");
@@ -497,6 +501,13 @@ export default function App() {
       ? "Sidecar 在线"
       : "Sidecar 检测中";
   const isProfileLocked = !syncConfig.access_token;
+
+  function showToast(kind: "info" | "warning" | "error" | "success", message: string, timeout = 3600) {
+    setToast({ kind, message });
+    window.setTimeout(() => {
+      setToast((current) => (current?.message === message ? null : current));
+    }, timeout);
+  }
 
   async function loadAll(keepSelection = true) {
     setLoading(true);
@@ -559,6 +570,13 @@ export default function App() {
     });
     const off = window.wordbookDesktop?.onSidecarStatus?.((status) => {
       setSidecarStatus(status as SidecarProcessStatus);
+      if ((status.state === "starting" || status.state === "restarting") && !status.healthy && !sidecarStartingToastRef.current) {
+        sidecarStartingToastRef.current = true;
+        showToast("info", "Sidecar 正在启动，首次加载模型时可能会慢一点。");
+      }
+      if (status.healthy) {
+        sidecarStartingToastRef.current = false;
+      }
       if (status.healthy && !wasHealthyRef.current) {
         loadAll(true);
       }
@@ -588,6 +606,12 @@ export default function App() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [view, profileSettingsPage, isSidecarOnline]);
+
+  useEffect(() => {
+    if (!asrStatus?.vad_asset || asrStatus.vad_asset.ready || asrVadToastRef.current) return;
+    asrVadToastRef.current = true;
+    showToast("warning", "ASR VAD 模型资源缺失，已临时关闭静音过滤；可在运行中心修复。", 5200);
+  }, [asrStatus?.vad_asset]);
 
   useEffect(() => {
     if (view !== "profile" || profileSettingsPage !== "runtime" || !logAutoScroll) return;
@@ -978,6 +1002,22 @@ export default function App() {
       setView("profile");
     } catch (err) {
       setLibraryError(String((err as Error).message || err));
+    }
+  }
+
+  async function onRepairAsrModel() {
+    setLibraryError("");
+    showToast("info", "正在修复 ASR VAD 资源，可能需要一点时间。");
+    try {
+      setAsrStatus(await repairAsrModel());
+      asrVadToastRef.current = false;
+      setProfileSettingsPage("runtime");
+      setView("profile");
+      showToast("success", "ASR 修复完成，可以重新开始语音识别。");
+    } catch (err) {
+      const message = String((err as Error).message || err);
+      setLibraryError(message);
+      showToast("error", `ASR 修复失败：${message}`, 5600);
     }
   }
 
@@ -1503,6 +1543,7 @@ export default function App() {
       loadState === "loading" ? "下载/加载中" : asrStatus?.loaded ? "已加载" : loadState === "error" ? "失败" : "未加载";
     const progress = asrStatus?.download_progress;
     const progressPercent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+    const asrVadMissing = Boolean(asrStatus?.vad_asset && !asrStatus.vad_asset.ready);
     const ocrLoadState = ocrStatus?.load_state?.state || "idle";
     const ocrBrokenCount = Number(ocrStatus?.broken_models?.length || 0);
     const ocrLabel =
@@ -1616,10 +1657,19 @@ export default function App() {
               </div>
             ) : null}
             {asrStatus?.load_state?.error ? <div className="runtime-error">{asrStatus.load_state.error}</div> : null}
-            <button className="runtime-action" onClick={onStartModelLoad} disabled={loadState === "loading"}>
-              <Download size={16} />
-              <span>{loadState === "loading" ? "正在处理" : "下载/加载模型"}</span>
-            </button>
+            {asrVadMissing ? (
+              <div className="runtime-error">ASR VAD 资源缺失，会影响静音过滤；修复会重新补齐该模型文件。</div>
+            ) : null}
+            <div className="export-actions">
+              <button className="runtime-action" onClick={onStartModelLoad} disabled={loadState === "loading"}>
+                <Download size={16} />
+                <span>{loadState === "loading" ? "正在处理" : "下载/加载模型"}</span>
+              </button>
+              <button className="runtime-action secondary" onClick={onRepairAsrModel} disabled={loadState === "loading"}>
+                <RefreshCw size={16} />
+                <span>修复 ASR 模型</span>
+              </button>
+            </div>
           </section>
         </div>
 
@@ -3097,6 +3147,11 @@ export default function App() {
           ) : null}
         </section>
       </main>
+      {toast ? (
+        <div className={`app-toast ${toast.kind}`} role="status" aria-live="polite">
+          {toast.message}
+        </div>
+      ) : null}
     </div>
   );
 }

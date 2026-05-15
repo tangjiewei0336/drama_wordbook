@@ -70,6 +70,13 @@ export type HealthStatus = {
       percent: number;
       cache_paths: string[];
     };
+    vad_asset?: {
+      ready: boolean;
+      package_path: string;
+      repair_path: string;
+      using_fallback: boolean;
+      error: string;
+    };
   };
   ocr?: {
     available: boolean;
@@ -256,6 +263,14 @@ export async function startAsrModelLoad(): Promise<AsrModelStatus> {
   const res = await fetch(`${SIDECAR_BASE}/asr/model/load`, { method: "POST" });
   if (!res.ok) {
     throw new Error(await parseApiError(res, `Model load failed: ${res.status}`));
+  }
+  return (await res.json()) as AsrModelStatus;
+}
+
+export async function repairAsrModel(): Promise<AsrModelStatus> {
+  const res = await fetch(`${SIDECAR_BASE}/asr/model/repair`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, `ASR 模型修复失败（${res.status}）`));
   }
   return (await res.json()) as AsrModelStatus;
 }
@@ -668,6 +683,14 @@ export type ReviewAnswerResult = {
   remaining_before_abort?: number;
 };
 
+export type ReviewBuildProgress = {
+  state: string;
+  current: number;
+  total: number;
+  percent: number;
+  message: string;
+};
+
 /** 本地日历日（浏览器时区）*/
 export function localCalendarDay(): string {
   const d = new Date();
@@ -679,6 +702,10 @@ export function localCalendarDay(): string {
 
 export async function fetchReviewSnapshot(): Promise<{ eligible_heads: number; mastered_heads: number }> {
   return getJson(`/review/snapshot`);
+}
+
+export async function fetchReviewBuildProgress(): Promise<ReviewBuildProgress> {
+  return getJson<ReviewBuildProgress>("/review/build-progress");
 }
 
 export async function postReviewStart(calendar_day: string, question_limit: number): Promise<ReviewStartResult> {

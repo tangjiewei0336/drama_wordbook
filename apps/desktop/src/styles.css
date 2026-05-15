@@ -32,6 +32,7 @@ button {
 }
 
 .app-shell {
+  position: relative;
   min-height: 100vh;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(247, 248, 251, 0.94)),
@@ -39,6 +40,55 @@ button {
     radial-gradient(circle at 85% 10%, rgba(48, 145, 119, 0.13), transparent 30%),
     #f7f8fb;
   padding: 18px;
+}
+
+.app-toast {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 80;
+  max-width: min(420px, calc(100vw - 44px));
+  padding: 12px 14px;
+  border-radius: 8px;
+  color: #1f2937;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(24, 32, 43, 0.1);
+  box-shadow: 0 16px 44px rgba(24, 32, 43, 0.16);
+  font-size: 0.92rem;
+  line-height: 1.45;
+  animation: app-toast-in 0.18s ease-out;
+}
+
+.app-toast.info {
+  border-color: rgba(79, 124, 255, 0.26);
+}
+
+.app-toast.warning {
+  border-color: rgba(214, 95, 74, 0.34);
+  background: #fffaf7;
+}
+
+.app-toast.error {
+  border-color: rgba(214, 95, 74, 0.4);
+  color: #8a2d20;
+  background: #fff7f5;
+}
+
+.app-toast.success {
+  border-color: rgba(46, 143, 118, 0.32);
+  color: #0f513f;
+  background: #f4fbf8;
+}
+
+@keyframes app-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .topbar {
@@ -3341,6 +3391,63 @@ button {
   border-radius: 999px;
   background: linear-gradient(90deg, var(--theme-color), #4f7cff);
   animation: review-progress-slide 1.15s ease-in-out infinite;
+}
+
+.review-progress-fill {
+  height: 100%;
+  min-width: 3%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--theme-color), #4f7cff);
+  transition: width 0.22s ease;
+}
+
+.review-correct-burst {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  animation: review-correct-fade 0.9s ease forwards;
+}
+
+.review-correct-burst span {
+  padding: 10px 18px;
+  border-radius: 999px;
+  color: #0f513f;
+  font-weight: 800;
+  background: rgba(224, 247, 238, 0.95);
+  border: 1px solid rgba(46, 143, 118, 0.28);
+  box-shadow: 0 14px 34px rgba(46, 143, 118, 0.22);
+  animation: review-correct-pop 0.72s cubic-bezier(0.2, 1.4, 0.35, 1) forwards;
+}
+
+@keyframes review-correct-fade {
+  0% {
+    background: rgba(46, 143, 118, 0);
+  }
+  35% {
+    background: rgba(46, 143, 118, 0.08);
+  }
+  100% {
+    background: rgba(46, 143, 118, 0);
+  }
+}
+
+@keyframes review-correct-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.88);
+  }
+  28% {
+    opacity: 1;
+    transform: translateY(0) scale(1.04);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.98);
+  }
 }
 
 @keyframes review-progress-slide {

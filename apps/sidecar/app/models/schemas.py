@@ -366,3 +366,11 @@ class ReviewAnswerResponse(BaseModel):
 class ReviewSnapshotResponse(BaseModel):
     eligible_heads: int = 0
     mastered_heads: int = 0
+
+
+class ReviewBuildProgressResponse(BaseModel):
+    state: str = "idle"
+    current: int = 0
+    total: int = 0
+    percent: int = 0
+    message: str = ""

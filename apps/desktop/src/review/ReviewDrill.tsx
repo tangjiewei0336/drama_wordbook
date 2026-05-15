@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  fetchReviewBuildProgress,
   fetchReviewCurrent,
   fetchReviewSnapshot,
   localCalendarDay,
@@ -53,6 +54,8 @@ export function ReviewDrill({ sidecarOnline }: Props) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropOverIdx, setDropOverIdx] = useState<number | null>(null);
   const [wrongReveal, setWrongReveal] = useState<WrongReveal | null>(null);
+  const [correctBurst, setCorrectBurst] = useState(0);
+  const [buildProgress, setBuildProgress] = useState({ state: "idle", current: 0, total: 0, percent: 0, message: "" });
 
   const [tipSpin, setTipSpin] = useState(0);
   const prevLoadingRef = useRef(false);
@@ -73,6 +76,26 @@ export function ReviewDrill({ sidecarOnline }: Props) {
   }, [loading]);
 
   const activeTip = REVIEW_LOADING_TIPS[tipSpin % REVIEW_LOADING_TIPS.length] ?? REVIEW_LOADING_TIPS[0];
+  const isBuildingReview = loading && (banner.includes("生成") || banner.includes("组卷"));
+
+  useEffect(() => {
+    if (!isBuildingReview) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const p = await fetchReviewBuildProgress();
+        if (!cancelled) setBuildProgress(p);
+      } catch {
+        // 进度状态只是增强显示，接口暂不可用时仍保留主流程。
+      }
+    };
+    void poll();
+    const id = window.setInterval(() => void poll(), 220);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [isBuildingReview]);
 
   const loadSnap = useCallback(async () => {
     if (!sidecarOnline) return;
@@ -159,10 +182,15 @@ export function ReviewDrill({ sidecarOnline }: Props) {
     setSessionStats((stats) => ({ ...stats, [kind]: stats[kind] + 1 }));
   }, []);
 
+  const flashCorrect = useCallback(() => {
+    setCorrectBurst((n) => n + 1);
+  }, []);
+
   const onStart = async () => {
     if (!sidecarOnline) return;
     setLoading(true);
     setBanner("正在生成中文释义并组卷，请稍候……");
+    setBuildProgress({ state: "building", current: 0, total: Math.max(1, limit), percent: 0, message: "准备组卷" });
     try {
       const r = await postReviewStart(calendarDay, limit);
       setSessionId(r.session_id);
@@ -273,6 +301,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
         setBanner("恭喜，该词头已满足「三日记住」条件，将不再进入复习队列。");
       } else setBanner("");
       bumpStats("correct");
+      flashCorrect();
       setDone(r.done);
       applyQuestion(r.current);
       await loadSnap();
@@ -305,6 +334,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
       }
       if (r.correct) {
         bumpStats("correct");
+        flashCorrect();
       } else if (r.hint_reading_after_wrong || r.advanced) {
         bumpStats("wrong");
       }
@@ -359,6 +389,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
       setDone(r.done);
       applyQuestion(r.current);
       bumpStats("correct");
+      flashCorrect();
       if (r.head_state?.mastered) {
         setBanner("恭喜，该词头已满足「三日记住」条件，将不再进入复习队列。");
       } else setBanner("");
@@ -478,6 +509,11 @@ export function ReviewDrill({ sidecarOnline }: Props) {
 
         {current && !done ? (
           <section className="review-card review-card-relative">
+            {correctBurst ? (
+              <div key={correctBurst} className="review-correct-burst" aria-hidden>
+                <span>答对了</span>
+              </div>
+            ) : null}
             <div className="review-card-head">
               <span className="review-badge">{modeLabel}</span>
               {queueTotal ? <small>题库本轮约 {queueTotal} 题（含错题重排）</small> : null}
@@ -660,10 +696,18 @@ export function ReviewDrill({ sidecarOnline }: Props) {
         <div className="review-loading-overlay" role="status" aria-live="polite">
           <div className="review-progress-block">
             <div className="review-progress-label">
-              {banner && (banner.includes("稍候") || banner.includes("生成")) ? banner : "处理中，请稍候……"}
+              {isBuildingReview && buildProgress.message
+                ? `${buildProgress.message}${buildProgress.total ? ` · ${buildProgress.percent}%` : ""}`
+                : banner && (banner.includes("稍候") || banner.includes("生成"))
+                  ? banner
+                  : "处理中，请稍候……"}
             </div>
             <div className="review-progress-track" aria-hidden>
-              <div className="review-progress-indeterminate" />
+              {isBuildingReview ? (
+                <div className="review-progress-fill" style={{ width: `${Math.max(3, Math.min(100, buildProgress.percent || 0))}%` }} />
+              ) : (
+                <div className="review-progress-indeterminate" />
+              )}
             </div>
           </div>
           <div className="review-loading-tip">
