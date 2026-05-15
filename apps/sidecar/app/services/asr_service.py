@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import traceback
 import urllib.request
 from datetime import datetime, timezone
@@ -34,6 +35,9 @@ ASR_VAD_ASSET_URL = os.getenv(
     "ASR_VAD_ASSET_URL",
     "https://raw.githubusercontent.com/SYSTRAN/faster-whisper/master/faster_whisper/assets/silero_vad_v6.onnx",
 ).strip()
+# Live ASR: higher beam/best_of improves accuracy on CPU; override for latency (e.g. ASR_DECODE_BEAM_SIZE=2).
+ASR_DECODE_BEAM_SIZE = max(1, int(os.getenv("ASR_DECODE_BEAM_SIZE", "5")))
+ASR_DECODE_BEST_OF = max(1, int(os.getenv("ASR_DECODE_BEST_OF", "5")))
 ASR_MODEL_TOTAL_BYTES = {
     "tiny": 78_200_000,
     "base": 147_900_000,
@@ -356,6 +360,7 @@ def transcribe_audio_chunk(
         logger.info("ASR skipped tiny audio payload: %s bytes", len(audio_bytes))
         return _empty_transcript(language)
     model = get_asr_model()
+    t0 = time.perf_counter()
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
         f.write(audio_bytes)
         temp_path = Path(f.name)
@@ -370,8 +375,8 @@ def transcribe_audio_chunk(
                     "min_silence_duration_ms": 450,
                     "speech_pad_ms": 160,
                 },
-                beam_size=5,
-                best_of=5,
+                beam_size=ASR_DECODE_BEAM_SIZE,
+                best_of=ASR_DECODE_BEST_OF,
                 temperature=0,
                 condition_on_previous_text=False,
             )
@@ -385,8 +390,8 @@ def transcribe_audio_chunk(
                     str(temp_path),
                     language=language,
                     vad_filter=False,
-                    beam_size=5,
-                    best_of=5,
+                    beam_size=ASR_DECODE_BEAM_SIZE,
+                    best_of=ASR_DECODE_BEST_OF,
                     temperature=0,
                     condition_on_previous_text=False,
                 )
@@ -406,12 +411,55 @@ def transcribe_audio_chunk(
                     "text": txt,
                 }
             )
-        return {
+        out = {
             "language": str(info.language or language),
             "duration": float(getattr(info, "duration", 0.0) or 0.0),
             "text": " ".join(texts).strip(),
             "chunks": chunks,
         }
+        # Bilibili / browser capture: VAD often drops whole clips as "non-speech" while Whisper still hears Japanese.
+        if with_vad and not out["text"] and len(audio_bytes) >= 3000:
+            logger.info(
+                "ASR empty with VAD; retrying without VAD (audio_bytes=%s)",
+                len(audio_bytes),
+            )
+            segments2, info2 = model.transcribe(
+                str(temp_path),
+                language=language,
+                vad_filter=False,
+                beam_size=ASR_DECODE_BEAM_SIZE,
+                best_of=ASR_DECODE_BEST_OF,
+                temperature=0,
+                condition_on_previous_text=False,
+            )
+            texts2: list[str] = []
+            chunks2: list[dict] = []
+            for seg in segments2:
+                txt = (seg.text or "").strip()
+                if not txt:
+                    continue
+                texts2.append(txt)
+                chunks2.append(
+                    {
+                        "start": float(seg.start),
+                        "end": float(seg.end),
+                        "text": txt,
+                    }
+                )
+            out = {
+                "language": str(info2.language or language),
+                "duration": float(getattr(info2, "duration", 0.0) or 0.0),
+                "text": " ".join(texts2).strip(),
+                "chunks": chunks2,
+            }
+        logger.info(
+            "ASR transcribe done in %.1fs (audio_bytes=%s, text_len=%s, beam=%s)",
+            time.perf_counter() - t0,
+            len(audio_bytes),
+            len(out["text"]),
+            ASR_DECODE_BEAM_SIZE,
+        )
+        return out
     finally:
         try:
             temp_path.unlink(missing_ok=True)
