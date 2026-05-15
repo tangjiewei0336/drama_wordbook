@@ -136,6 +136,7 @@ const SYLLABLES: Array<[string, string]> = [
   ["se", "せ"],
   ["so", "そ"],
   ["za", "ざ"],
+  ["ji", "じ"],
   ["zi", "じ"],
   ["zu", "ず"],
   ["ze", "ぜ"],

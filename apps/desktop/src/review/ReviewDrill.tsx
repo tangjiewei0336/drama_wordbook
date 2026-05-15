@@ -13,6 +13,9 @@ import { markReadingLcs, normalizeReadingInput } from "./lcsJa";
 import { applyRomajiKey, romajiStateToSubmitText, type RomajiBufferState } from "./romajiKana";
 import { REVIEW_LOADING_TIPS } from "./reviewLoadingTips";
 
+/** 加载遮罩内中日提示语轮换间隔（毫秒）；略长便于读完一句再切下一条 */
+const REVIEW_LOADING_TIP_ROTATE_MS = 10_000;
+
 function speakJapanese(text: string): void {
   const t = String(text || "").trim();
   if (!t) return;
@@ -71,7 +74,7 @@ export function ReviewDrill({ sidecarOnline }: Props) {
     if (!loading) return;
     const id = window.setInterval(() => {
       setTipSpin((n) => (n + 1) % REVIEW_LOADING_TIPS.length);
-    }, 4200);
+    }, REVIEW_LOADING_TIP_ROTATE_MS);
     return () => window.clearInterval(id);
   }, [loading]);
 
